@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from app.column_map import WRITE_COLUMNS
 from app.indexer import SemanticIndex
 from app.semantic_data import PRTS, build_records
-
-ROOT = Path(__file__).resolve().parents[1]
 
 records = build_records()
 assert len(PRTS) == 20
