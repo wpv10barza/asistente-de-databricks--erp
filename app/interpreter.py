@@ -196,17 +196,27 @@ def interpret_command(
         raise RuntimeError("GEMINI_API_KEY no está configurada.")
 
     from google import genai
-    from google.genai import types
+    from google.genai import errors, types
 
     client = genai.Client(api_key=settings.gemini_api_key)
-    response = client.models.generate_content(
-        model=settings.gemini_model,
-        contents=build_prompt(text, detected_headers, detected_catalogs),
-        config=types.GenerateContentConfig(
-            temperature=0,
-            response_mime_type="application/json",
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=build_prompt(text, detected_headers, detected_catalogs),
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+            ),
+        )
+    except errors.ClientError as exc:
+        if getattr(exc, "code", None) in {400, 401, 403}:
+            raise RuntimeError(
+                "Gemini rechazó la credencial o la autorización. "
+                "Reemplaza GEMINI_API_KEY por una clave válida de Google AI Studio."
+            ) from exc
+        raise RuntimeError("Gemini rechazó la solicitud.") from exc
+    except errors.APIError as exc:
+        raise RuntimeError("Gemini API no está disponible temporalmente.") from exc
     parsed = json.loads(response.text or "{}")
     if not isinstance(parsed, dict):
         raise ValueError("La respuesta del modelo no es un objeto JSON.")
