@@ -1,0 +1,49 @@
+name: Deploy to Databricks Apps
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      DATABRICKS_AUTH_TYPE: github-oidc
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Validate bundle
+        run: databricks bundle validate --target prod
+
+      - name: Deploy bundle
+        run: databricks bundle deploy --target prod
+
+      - name: Start or restart app
+        run: databricks bundle run asistente_databricks_erp --target prod
+
+      - name: Wait for app to be running
+        env:
+          APP_NAME: asistente-databricks-erp
+        run: |
+          for i in $(seq 1 20); do
+            STATE=$(databricks apps get "$APP_NAME" --output json | jq -r '.app_status.state')
+            echo "Attempt $i/20: state=$STATE"
+            if [ "$STATE" = "RUNNING" ]; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "App did not reach RUNNING state within 5 minutes" >&2
+          databricks apps logs "$APP_NAME" --tail-lines 200 || true
+          exit 1

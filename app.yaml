@@ -1,0 +1,21 @@
+command:
+  - uvicorn
+  - app.main:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - ${DATABRICKS_APP_PORT}
+
+env:
+  - name: SPREADSHEET_ID
+    value: "1tLNo0_xjtmWKM9Y7PcChFut8S0w0kMKeAvFi9zg52gA"
+  - name: SHEET_NAME
+    value: "Data"
+  - name: HEADER_ROW
+    value: "4"
+  - name: ALLOW_SHEET_WRITE
+    value: "false"
+  - name: GEMINI_MODEL
+    value: "gemini-2.5-flash"
+  - name: ALLOW_INSECURE_DEVICE_API
+    value: "false"

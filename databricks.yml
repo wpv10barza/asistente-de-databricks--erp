@@ -1,0 +1,19 @@
+bundle:
+  name: asistente-databricks-erp
+
+resources:
+  apps:
+    asistente_databricks_erp:
+      name: asistente-databricks-erp
+      description: "Asistente 3C + Pocket RAG migrado para ejecución directa en Databricks Apps"
+      git_repository:
+        url: https://github.com/wpv10barza/asistente-de-databricks--erp
+      git_source:
+        branch: main
+
+targets:
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-a1aca8aa-28bd.cloud.databricks.com
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
