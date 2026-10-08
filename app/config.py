@@ -26,6 +26,9 @@ class Settings:
         os.getenv("ALLOW_INSECURE_DEVICE_API", "false").lower() == "true"
     )
 
+    ota_volume_path: str = os.getenv("OTA_VOLUME_PATH", "")
+    ota_channel: str = os.getenv("OTA_CHANNEL", "stable")
+
     @property
     def sheet_auth_mode(self) -> str:
         if self.google_service_account_json:
