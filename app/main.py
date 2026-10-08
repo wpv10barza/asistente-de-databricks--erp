@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from .column_map import SHEET_HEADERS_A_AF, WRITE_COLUMNS
 from .config import Settings
 from .device_store import DeviceCommandStore, normalize_device_command, verify_device_token
+from .firmware_ota import FirmwareOtaError, FirmwareOtaStore
 from .google_sheets import SheetsError, SheetsGateway
 from .indexer import SemanticIndex
 from .interpreter import interpret_command
@@ -28,6 +29,7 @@ semantic_index = SemanticIndex.load()
 sheet_index = LiveSheetIndex()
 device_commands = DeviceCommandStore()
 review_store = ReviewStore()
+firmware_ota = FirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
 
 
 class SearchRequest(BaseModel):
@@ -136,6 +138,8 @@ def health() -> dict:
         "sheet_write_enabled": settings.allow_sheet_write,
         "gemini_configured": bool(settings.gemini_api_key),
         "device_api_configured": bool(settings.esp32_api_token),
+        "ota_volume_configured": firmware_ota.configured,
+        "ota_channel": settings.ota_channel,
         "human_confirmation_required": True,
     }
 
@@ -368,11 +372,49 @@ def device_health() -> dict:
         "requires_human_confirmation": True,
         "protocol_version": "1.0",
         "supports_status_polling": True,
+        "supports_https_ota": True,
+        "firmware_latest_path": "/api/device/v1/firmware/latest",
         "discovery": {
             "mode": "databricks_app_url",
             "mdns": False,
         },
     }
+
+
+@app.get("/api/device/v1/firmware/latest")
+def latest_device_firmware(request: Request) -> dict:
+    _device_authorization(request)
+    try:
+        release = firmware_ota.latest()
+    except FirmwareOtaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        **release.public(),
+        "channel": settings.ota_channel,
+        "transport": "https",
+        "verification": "sha256",
+    }
+
+
+@app.get("/api/device/v1/firmware/{version}.bin")
+def download_device_firmware(version: str, request: Request) -> FileResponse:
+    _device_authorization(request)
+    try:
+        release = firmware_ota.release(version)
+    except FirmwareOtaError as exc:
+        message = str(exc)
+        status = 404 if "no encontrado" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+    return FileResponse(
+        path=release.path,
+        media_type="application/octet-stream",
+        filename=f"esp32-s3-4848s040-{release.version}.bin",
+        headers={
+            "X-Firmware-Version": release.version,
+            "X-Firmware-SHA256": release.sha256,
+            "Cache-Control": "private, max-age=300",
+        },
+    )
 
 
 @app.post("/api/device/v1/commands")
