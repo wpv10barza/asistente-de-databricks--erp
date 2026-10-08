@@ -13,5 +13,7 @@ env:
     value: "false"
   - name: GEMINI_MODEL
     value: "gemini-2.5-flash"
+  - name: GEMINI_API_KEY
+    valueFrom: gemini_api_key
   - name: ALLOW_INSECURE_DEVICE_API
     value: "false"
