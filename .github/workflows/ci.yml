@@ -47,14 +47,7 @@ jobs:
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/api/health > /tmp/health.json; then
               cat /tmp/health.json
-              python - <<'PY'
-import json
-with open("/tmp/health.json", encoding="utf-8") as fh:
-    body = json.load(fh)
-assert body["ok"] is True
-assert body["records_indexed"] == 360
-assert body["sheet_write_enabled"] is False
-PY
+              python -c "import json; b=json.load(open('/tmp/health.json')); assert b['ok'] is True; assert b['records_indexed']==360; assert b['sheet_write_enabled'] is False"
               exit 0
             fi
             if ! kill -0 "$APP_PID" 2>/dev/null; then
