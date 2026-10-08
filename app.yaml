@@ -1,10 +1,6 @@
 command:
-  - uvicorn
-  - app.main:app
-  - --host
-  - 0.0.0.0
-  - --port
-  - ${DATABRICKS_APP_PORT}
+  - python
+  - app.py
 
 env:
   - name: SPREADSHEET_ID

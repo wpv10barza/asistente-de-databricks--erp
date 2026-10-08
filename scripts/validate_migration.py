@@ -22,17 +22,24 @@ assert index.search("termografía punto caliente tablero", 3)
 
 assert not (ROOT / "Dockerfile").exists(), "Databricks-only repo must not require Dockerfile"
 assert not (ROOT / "docker-compose.yml").exists(), "Databricks-only repo must not require Compose"
+assert (ROOT / "app.py").exists()
 assert (ROOT / "app.yaml").exists()
 assert (ROOT / "databricks.yml").exists()
 
 app_yaml = (ROOT / "app.yaml").read_text(encoding="utf-8")
-assert "DATABRICKS_APP_PORT" in app_yaml
+assert "python" in app_yaml
+assert "app.py" in app_yaml
 assert "ALLOW_SHEET_WRITE" in app_yaml
 assert 'value: "false"' in app_yaml
+
+app_entry = (ROOT / "app.py").read_text(encoding="utf-8")
+assert "DATABRICKS_APP_PORT" in app_entry
+assert "uvicorn.run" in app_entry
 
 print(
     "MIGRATION_VALIDATED "
     "runtime=databricks-only records=360 "
     "write_columns=B,C,H,I,J,K,L,M,N,O "
-    "docker=not-required wsl=not-required"
+    "docker=not-required wsl=not-required "
+    "entrypoint=python-app.py"
 )

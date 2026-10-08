@@ -23,7 +23,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile Python
-        run: python -m compileall -q app scripts tests
+        run: python -m compileall -q app app.py scripts tests
 
       - name: Validate migration invariants
         run: python scripts/validate_migration.py
@@ -33,3 +33,38 @@ jobs:
 
       - name: Tests
         run: pytest
+
+      - name: Databricks startup smoke test
+        env:
+          DATABRICKS_APP_PORT: "8000"
+          ALLOW_SHEET_WRITE: "false"
+        run: |
+          set -euo pipefail
+          python app.py > /tmp/pocketcloud-app.log 2>&1 &
+          APP_PID=$!
+          trap 'cat /tmp/pocketcloud-app.log; kill $APP_PID 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health > /tmp/health.json; then
+              cat /tmp/health.json
+              python - <<'PY'
+import json
+with open("/tmp/health.json", encoding="utf-8") as fh:
+    body = json.load(fh)
+assert body["ok"] is True
+assert body["records_indexed"] == 360
+assert body["sheet_write_enabled"] is False
+PY
+              exit 0
+            fi
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              echo "App process exited before health check succeeded" >&2
+              cat /tmp/pocketcloud-app.log >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "Health check timed out" >&2
+          cat /tmp/pocketcloud-app.log >&2
+          exit 1
