@@ -209,12 +209,18 @@ def interpret_command(
             ),
         )
     except errors.ClientError as exc:
-        if getattr(exc, "code", None) in {400, 401, 403}:
+        status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+        if status in {400, 401, 403}:
             raise RuntimeError(
-                "Gemini rechazó la credencial o la autorización. "
-                "Reemplaza GEMINI_API_KEY por una clave válida de Google AI Studio."
+                f"Gemini rechazó credencial/autorización o acceso al modelo (HTTP {status})."
             ) from exc
-        raise RuntimeError("Gemini rechazó la solicitud.") from exc
+        if status == 404:
+            raise RuntimeError(
+                "El modelo Gemini configurado no está disponible para este proyecto."
+            ) from exc
+        raise RuntimeError(
+            f"Gemini rechazó la solicitud (HTTP {status or 'desconocido'})."
+        ) from exc
     except errors.APIError as exc:
         raise RuntimeError("Gemini API no está disponible temporalmente.") from exc
     parsed = json.loads(response.text or "{}")
