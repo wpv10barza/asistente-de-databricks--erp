@@ -403,7 +403,9 @@ def download_device_firmware(version: str, request: Request) -> FileResponse:
         release = firmware_ota.release(version)
     except FirmwareOtaError as exc:
         message = str(exc)
-        status = 404 if "no encontrado" in message.lower() else 400
+        status = (404 if "no encontrado" in message.lower()
+                  else 400 if "versión ota inválida" in message.lower()
+                  else 503)
         raise HTTPException(status_code=status, detail=message) from exc
     return FileResponse(
         path=release.path,

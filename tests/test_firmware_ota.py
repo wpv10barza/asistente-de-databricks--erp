@@ -58,3 +58,36 @@ def test_unconfigured_volume_fails_closed() -> None:
     store = FirmwareOtaStore("")
     with pytest.raises(FirmwareOtaError):
         store.latest()
+
+def test_rejects_modified_firmware_even_when_size_matches(tmp_path: Path) -> None:
+    make_release(tmp_path, payload=b"abcdefgh")
+    (tmp_path / "stable" / "1.0.1" / "firmware.bin").write_bytes(b"ABCDEFGH")
+    with pytest.raises(FirmwareOtaError, match="SHA-256 real"):
+        FirmwareOtaStore(str(tmp_path)).latest()
+
+
+def test_rejects_latest_hash_mismatch(tmp_path: Path) -> None:
+    make_release(tmp_path)
+    latest_path = tmp_path / "stable" / "latest.json"
+    current = json.loads(latest_path.read_text(encoding="utf-8"))
+    current["sha256"] = "a" * 64
+    latest_path.write_text(json.dumps(current), encoding="utf-8")
+    with pytest.raises(FirmwareOtaError, match="SHA-256 de latest"):
+        FirmwareOtaStore(str(tmp_path)).latest()
+
+
+def test_rejects_missing_release_manifest(tmp_path: Path) -> None:
+    make_release(tmp_path)
+    (tmp_path / "stable" / "1.0.1" / "manifest.json").unlink()
+    with pytest.raises(FirmwareOtaError, match="Falta manifest.json"):
+        FirmwareOtaStore(str(tmp_path)).release("1.0.1")
+
+
+def test_rejects_manifest_version_mismatch(tmp_path: Path) -> None:
+    make_release(tmp_path)
+    path = tmp_path / "stable" / "1.0.1" / "manifest.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["version"] = "1.0.9"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(FirmwareOtaError, match="versión del manifiesto"):
+        FirmwareOtaStore(str(tmp_path)).release("1.0.1")
