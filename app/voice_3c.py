@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
+import os
 import re
 import time
 import uuid
+from pathlib import Path
 from dataclasses import dataclass
 from threading import RLock
 
@@ -124,17 +127,77 @@ def safe_command(value: str) -> str:
     return cleaned
 
 
+class VoiceStoreUnavailable(RuntimeError):
+    """The configured cloud mirror is unusable; never silently fall back to RAM."""
+
+
 @dataclass
 class VoiceDraftStore:
     ttl_seconds: int = TTL_SECONDS
+    path: str = ""
 
     def __post_init__(self):
         self._lock = RLock()
         self._drafts: list[dict] = []
+        self._last_polls: dict[str, float] = {}
+        self._refresh()
+
+    def _refresh(self) -> None:
+        """Reload a single-replica snapshot when a durable path is configured."""
+        if not self.path:
+            return
+        try:
+            file = Path(self.path)
+            if not file.exists():
+                self._drafts = []
+                self._last_polls = {}
+                return
+            if file.stat().st_size > 256_000:
+                raise ValueError("mirror snapshot exceeds bounded size")
+            with file.open("r", encoding="utf-8") as stream:
+                state = json.load(stream)
+            if (not isinstance(state, dict) or
+                not isinstance(state.get("drafts"), list) or
+                not isinstance(state.get("last_polls"), dict)):
+                raise ValueError("invalid mirror snapshot")
+            self._drafts = state["drafts"]
+            self._last_polls = state["last_polls"]
+        except (OSError, ValueError, TypeError) as exc:
+            raise VoiceStoreUnavailable("El espejo de voz no esta disponible.") from exc
+
+    def _save(self) -> None:
+        if not self.path:
+            return
+        file = Path(self.path)
+        temp = file.with_name(file.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            state = {"version": 1, "drafts": self._drafts, "last_polls": self._last_polls}
+            with temp.open("w", encoding="utf-8") as stream:
+                json.dump(state, stream, ensure_ascii=False, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp, file)
+        except (OSError, TypeError, ValueError) as exc:
+            raise VoiceStoreUnavailable("No se pudo guardar el espejo de voz.") from exc
+        finally:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _prune(self):
         now = time.time()
-        self._drafts = [d for d in self._drafts if d["_created"] + self.ttl_seconds > now][-MAX_DRAFTS:]
+        self._drafts = [
+            d for d in self._drafts
+            if isinstance(d, dict) and
+            isinstance(d.get("_created"), (int, float)) and
+            d["_created"] + self.ttl_seconds > now
+        ][-MAX_DRAFTS:]
+        self._last_polls = {
+            k: v for k, v in self._last_polls.items()
+            if isinstance(v, (int, float)) and now - v <= self.ttl_seconds
+        }
 
     def queue(self, device_id: str, text: str, request_id: str) -> tuple[dict, bool]:
         device_id = safe_device_id(device_id)
@@ -143,6 +206,7 @@ class VoiceDraftStore:
         if not re.fullmatch(r"[A-Za-z0-9._:-]{1,96}", request_id):
             raise VoiceError("request_id inválido")
         with self._lock:
+            self._refresh()
             self._prune()
             for d in self._drafts:
                 if d["device_id"] == device_id and d["request_id"] == request_id:
@@ -157,11 +221,48 @@ class VoiceDraftStore:
             }
             self._drafts.append(draft)
             self._prune()
+            self._save()  # Do not return HTTP 202 until stored, if mirror is enabled.
             return self._public(draft), False
+
+    def observe_poll(self, device_id: str) -> None:
+        """The existing ESP32 HTTPS inbox GET doubles as an authenticated heartbeat."""
+        device_id = safe_device_id(device_id)
+        with self._lock:
+            self._refresh()
+            now = time.time()
+            before = self._last_polls.get(device_id, 0)
+            self._last_polls[device_id] = now
+            if self.path and now - before >= 30:
+                self._prune()
+                self._save()
+
+    def sync(self, device_id: str) -> dict:
+        device_id = safe_device_id(device_id)
+        with self._lock:
+            self._refresh()
+            self._prune()
+            last_seen = self._last_polls.get(device_id)
+            age = max(0, int(time.time() - last_seen)) if last_seen else None
+            pending = sum(d["device_id"] == device_id and d["status"] == "queued_for_editor"
+                          for d in self._drafts)
+            delivered = sum(d["device_id"] == device_id and d["status"] == "delivered_to_editor"
+                            for d in self._drafts)
+            return {
+                "device_id": device_id,
+                "panel_seen_recently": age is not None and age <= 90,
+                "seconds_since_panel_poll": age,
+                "queued_for_editor": pending,
+                "delivered_to_editor": delivered,
+                "mirror_mode": "single_instance_volume" if self.path else "memory_only",
+                "durable_across_restarts": bool(self.path),
+                "multi_replica_guaranteed": False,
+                "sheets_modified": False,
+            }
 
     def next(self, device_id: str) -> dict | None:
         device_id = safe_device_id(device_id)
         with self._lock:
+            self._refresh()
             self._prune()
             for d in self._drafts:
                 if d["device_id"] == device_id and d["status"] == "queued_for_editor":
@@ -171,6 +272,7 @@ class VoiceDraftStore:
     def get(self, device_id: str, draft_id: str) -> dict | None:
         device_id = safe_device_id(device_id)
         with self._lock:
+            self._refresh()
             self._prune()
             for d in self._drafts:
                 if d["device_id"] == device_id and d["id"] == draft_id:
@@ -180,10 +282,13 @@ class VoiceDraftStore:
     def ack(self, device_id: str, draft_id: str) -> dict | None:
         device_id = safe_device_id(device_id)
         with self._lock:
+            self._refresh()
             self._prune()
             for d in self._drafts:
                 if d["id"] == draft_id and d["device_id"] == device_id:
-                    d["status"] = "delivered_to_editor"
+                    if d["status"] != "delivered_to_editor":
+                        d["status"] = "delivered_to_editor"
+                        self._save()
                     return self._public(d)
         return None
 

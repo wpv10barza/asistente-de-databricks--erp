@@ -141,3 +141,43 @@ y no prueba acceso real a Google Sheets.
 
 La App requiere OAuth Databricks Apps además de `X-3C-Device-Token`
 cuando el workspace lo solicite. No se almacenan tokens en Git.
+
+
+## Espejo cloud de voz ESP32 (opt-in, sin IP LAN)
+
+El firmware existente consulta por HTTPS el endpoint
+GET /api/device/v1/voice/inbox/panel aproximadamente cada 9 segundos.
+Esa llamada autenticada registra una senal de vida del dispositivo.
+GET /api/device/v1/voice/sync?device_id=panel-4848s040-3c-01
+(con X-3C-Device-Token y OAuth Databricks cuando corresponda) indica
+panel_seen_recently, antiguedad del ultimo contacto y numero de borradores
+queued_for_editor / delivered_to_editor. No precisa abrir el puerto 80
+del panel ni conocer su IP local; no escribe Sheets.
+
+**Durabilidad optativa:** asigne a la App un UC Volume con permiso
+Can read and write y configure VOICE_DRAFT_STORE_PATH a un archivo
+JSON dentro de la ruta montada, por ejemplo
+/Volumes/<catalogo>/<esquema>/<volume>/voice/drafts.json.
+La ruta es de ejemplo; no invente ni use el Volume de firmware OTA
+sin comprobar permisos. Puede definirla en app.yaml cuando haya creado
+y vinculado el recurso de almacenamiento.
+El servidor conservara hasta 50 borradores durante 15 minutos, el estado
+de recepcion y ACK incluso si el proceso se reinicia. Si la ruta configurada
+no es escribible, las operaciones de voz fallan con HTTP 503 en lugar de
+aceptar borradores que no puedan persistirse. Con la variable vacia,
+el modo sera memory_only, como antes.
+
+**Limitacion crucial:** este espejo de fichero es para **una sola instancia**
+de FastAPI. No ofrece transacciones entre replicas/instancias ni sustituye
+una cola administrada o tabla transaccional. Para alta disponibilidad real
+migre a almacenamiento que garantice escrituras atomicas concurrentes.
+panel_seen_recently se basa en el ultimo GET de bandeja autenticado; indica
+actividad reciente, no demuestra que el borrador haya llegado al editor.
+Solo delivered_to_editor confirma el ACK del dispositivo. Al reiniciar el
+ESP32 o caer Wi-Fi pueden seguir existiendo interrupciones de red: el
+espejo conserva y ayuda a diagnosticar, pero no puede impedirlas.
+
+Despliegue el backend nuevo en **asistente-cloud-erp** y consulte con
+el cliente de voz scripts/Diagnosticar-Mirror3C.ps1. El commit de GitHub
+y CI exitosa no equivalen a un despliegue en Databricks.
+La revision tactil y ALLOW_SHEET_WRITE=false se mantienen intactos.

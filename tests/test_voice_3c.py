@@ -4,7 +4,7 @@ import base64
 import pytest
 from fastapi.testclient import TestClient
 import app.main as backend
-from app.voice_3c import VoiceDraftStore, VoiceError, decode_audio, safe_command
+from app.voice_3c import VoiceDraftStore, VoiceError, VoiceStoreUnavailable, decode_audio, safe_command
 
 AUTH = {"X-3C-Device-Token": "ci-token"}
 DEVICE = "panel-4848s040-3c-01"
@@ -204,3 +204,49 @@ def test_gemini_38_model_configuration_migrated():
     ).read_text(encoding="utf-8").split("def _generate_gemini_content")[1].split(
         "def list_accessible_gemini_models"
     )[0]
+
+
+def test_cloud_sync_mirrors_real_esp32_https_poll_without_lan_ip(app_client):
+    before = app_client.get("/api/device/v1/voice/sync", headers=AUTH,
+                            params={"device_id": DEVICE})
+    assert before.status_code == 200
+    assert before.json()["panel_seen_recently"] is False
+    assert before.json()["mirror_mode"] == "memory_only"
+    assert app_client.get("/api/device/v1/voice/sync",
+                          params={"device_id": DEVICE}).status_code == 401
+    # This is the same authenticated GET the actual ESP32 firmware already uses.
+    inbox = app_client.get("/api/device/v1/voice/inbox/panel", headers=AUTH,
+                           params={"device_id": DEVICE})
+    assert inbox.status_code == 200
+    after = app_client.get("/api/device/v1/voice/sync", headers=AUTH,
+                           params={"device_id": DEVICE})
+    assert after.json()["panel_seen_recently"] is True
+    assert after.json()["seconds_since_panel_poll"] <= 3
+    assert after.json()["multi_replica_guaranteed"] is False
+
+
+def test_voice_volume_mirror_survives_restart_and_ack(tmp_path):
+    path = str(tmp_path / "voice" / "drafts.json")
+    first = VoiceDraftStore(path=path)
+    draft, duplicate = first.queue(DEVICE, "Revisar lubricación", "request-retry")
+    assert not duplicate
+    assert first.sync(DEVICE)["durable_across_restarts"] is True
+    restarted = VoiceDraftStore(path=path)
+    assert restarted.next(DEVICE)["text"] == "Revisar lubricación"
+    again, duplicate = restarted.queue(DEVICE, "Revisar lubricación", "request-retry")
+    assert duplicate is True
+    assert again["id"] == draft["id"]
+    restarted.observe_poll(DEVICE)
+    after_poll = VoiceDraftStore(path=path)
+    assert after_poll.sync(DEVICE)["panel_seen_recently"] is True
+    assert after_poll.ack(DEVICE, draft["id"])["status"] == "delivered_to_editor"
+    assert VoiceDraftStore(path=path).next(DEVICE) is None
+    assert VoiceDraftStore(path=path).get(DEVICE, draft["id"])["status"] == "delivered_to_editor"
+
+
+def test_voice_mirror_write_error_fails_closed(tmp_path):
+    obstructed = tmp_path / "not_a_directory"
+    obstructed.write_text("x")
+    store = VoiceDraftStore(path=str(obstructed / "voice.json"))
+    with pytest.raises(VoiceStoreUnavailable):
+        store.queue(DEVICE, "No editar Sheets", "request-write-error")

@@ -16,7 +16,7 @@ from .interpreter import interpret_command
 from .review_store import ReviewStore
 from .history_store import HistoryStore, panel_lines
 from .sheet_index import LiveSheetIndex
-from .voice_3c import VoiceDraftStore, VoiceError, VoiceProviderError, decode_audio, transcribe_with_gemini, probe_gemini, list_accessible_gemini_models, safe_device_id
+from .voice_3c import VoiceDraftStore, VoiceError, VoiceProviderError, decode_audio, transcribe_with_gemini, probe_gemini, list_accessible_gemini_models, safe_device_id, VoiceStoreUnavailable
 
 
 app = FastAPI(
@@ -33,7 +33,7 @@ device_commands = DeviceCommandStore()
 review_store = ReviewStore()
 history_store = HistoryStore(settings.history_log_path)
 firmware_ota = FirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
-voice_drafts = VoiceDraftStore()
+voice_drafts = VoiceDraftStore(path=settings.voice_draft_store_path)
 
 
 class SearchRequest(BaseModel):
@@ -646,6 +646,8 @@ def enqueue_voice_draft(item: VoiceDraftRequest, request: Request) -> dict:
         draft, duplicate = voice_drafts.queue(item.device_id, item.text, item.request_id)
     except VoiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {
         "draft_id": draft["id"],
         "status": draft["status"],
@@ -655,13 +657,28 @@ def enqueue_voice_draft(item: VoiceDraftRequest, request: Request) -> dict:
     }
 
 
+@app.get("/api/device/v1/voice/sync")
+def voice_cloud_mirror_status(request: Request, device_id: str) -> dict:
+    """Diagnose device-to-cloud HTTPS polls without depending on LAN IP."""
+    _device_authorization(request)
+    try:
+        return voice_drafts.sync(device_id)
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @app.get("/api/device/v1/voice/inbox/panel", response_class=PlainTextResponse)
 def voice_panel_inbox(request: Request, device_id: str) -> str:
     _device_authorization(request)
     try:
+        voice_drafts.observe_poll(device_id)
         draft = voice_drafts.next(device_id)
     except VoiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not draft:
         return ""
     # Sanitize controls at enqueue so split-on-tab is unambiguous to the MCU.
@@ -675,6 +692,8 @@ def voice_inbox(request: Request, device_id: str) -> dict:
         return {"draft": voice_drafts.next(device_id)}
     except VoiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/device/v1/voice/drafts/{draft_id}")
@@ -684,6 +703,8 @@ def voice_draft_status(draft_id: str, device_id: str, request: Request) -> dict:
         draft = voice_drafts.get(device_id, draft_id)
     except VoiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not draft:
         raise HTTPException(status_code=404, detail="Borrador no encontrado/caducado")
     return {
@@ -702,6 +723,8 @@ def acknowledge_voice_draft(draft_id: str, item: VoiceDraftAck, request: Request
         draft = voice_drafts.ack(item.device_id, draft_id)
     except VoiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not draft:
         raise HTTPException(status_code=404, detail="Borrador caducado o dispositivo distinto")
     return {"status": draft["status"], "sheets_modified": False}
