@@ -140,6 +140,7 @@ class VoiceDraftStore:
         self._lock = RLock()
         self._drafts: list[dict] = []
         self._last_polls: dict[str, float] = {}
+        self._captures: list[dict] = []
         self._refresh()
 
     def _refresh(self) -> None:
@@ -151,6 +152,7 @@ class VoiceDraftStore:
             if not file.exists():
                 self._drafts = []
                 self._last_polls = {}
+                self._captures = []
                 return
             if file.stat().st_size > 256_000:
                 raise ValueError("mirror snapshot exceeds bounded size")
@@ -162,6 +164,9 @@ class VoiceDraftStore:
                 raise ValueError("invalid mirror snapshot")
             self._drafts = state["drafts"]
             self._last_polls = state["last_polls"]
+            self._captures = state.get("captures", [])
+            if not isinstance(self._captures, list):
+                raise ValueError("invalid capture requests")
         except (OSError, ValueError, TypeError) as exc:
             raise VoiceStoreUnavailable("El espejo de voz no esta disponible.") from exc
 
@@ -172,7 +177,8 @@ class VoiceDraftStore:
         temp = file.with_name(file.name + "." + uuid.uuid4().hex + ".tmp")
         try:
             file.parent.mkdir(parents=True, exist_ok=True)
-            state = {"version": 1, "drafts": self._drafts, "last_polls": self._last_polls}
+            state = {"version": 1, "drafts": self._drafts, "last_polls": self._last_polls,
+                     "captures": self._captures}
             with temp.open("w", encoding="utf-8") as stream:
                 json.dump(state, stream, ensure_ascii=False, separators=(",", ":"))
                 stream.flush()
@@ -198,6 +204,64 @@ class VoiceDraftStore:
             k: v for k, v in self._last_polls.items()
             if isinstance(v, (int, float)) and now - v <= self.ttl_seconds
         }
+
+    # A physical button on the panel requests one short recording on the
+    # consenting Windows PC. Only an explicitly running PC agent can claim it.
+    # Device IDs identify mailboxes; authentication remains compulsory.
+    def request_capture(self, device_id: str) -> tuple[dict, bool]:
+        device_id = safe_device_id(device_id)
+        with self._lock:
+            self._refresh()
+            now = time.time()
+            self._captures = [
+                item for item in self._captures
+                if item.get("_created", 0) + 300 > now
+            ][-30:]
+            for item in self._captures:
+                if (item["device_id"] == device_id and
+                    item["status"] in ("pending", "claimed")):
+                    return self._public(item), True
+            item = {"id": str(uuid.uuid4()), "device_id": device_id,
+                    "status": "pending", "_created": now}
+            self._captures.append(item)
+            self._save()
+            return self._public(item), False
+
+    def claim_capture(self, device_id: str) -> dict | None:
+        device_id = safe_device_id(device_id)
+        with self._lock:
+            self._refresh()
+            now = time.time()
+            for item in self._captures:
+                if item.get("device_id") != device_id:
+                    continue
+                if item.get("_created", 0) + 180 <= now:
+                    continue
+                if (item["status"] == "claimed" and
+                    item.get("_claimed", 0) + 120 < now):
+                    item["status"] = "pending"
+                if item["status"] == "pending":
+                    item["status"] = "claimed"
+                    item["_claimed"] = now
+                    self._save()
+                    return self._public(item)
+        return None
+
+    def finish_capture(self, device_id: str, capture_id: str,
+                       success: bool) -> dict | None:
+        device_id = safe_device_id(device_id)
+        with self._lock:
+            self._refresh()
+            for item in self._captures:
+                if item["device_id"] == device_id and item["id"] == capture_id:
+                    if item["status"] in ("completed", "failed"):
+                        return self._public(item)
+                    if item["status"] != "claimed":
+                        return None
+                    item["status"] = "completed" if success else "failed"
+                    self._save()
+                    return self._public(item)
+        return None
 
     def queue(self, device_id: str, text: str, request_id: str) -> tuple[dict, bool]:
         device_id = safe_device_id(device_id)
@@ -257,6 +321,9 @@ class VoiceDraftStore:
                 "durable_across_restarts": bool(self.path),
                 "multi_replica_guaranteed": False,
                 "sheets_modified": False,
+                "capture_status": next(
+                    (c["status"] for c in reversed(self._captures)
+                     if c.get("device_id") == device_id), "none"),
             }
 
     def next(self, device_id: str) -> dict | None:
