@@ -110,6 +110,10 @@ def test_by_commit_only_uses_published_release(tmp_path: Path) -> None:
     manifest = tmp_path / "stable" / "2.7.0" / "manifest.json"
     data = json.loads(manifest.read_text(encoding="utf-8"))
     data["source_sha"] = sha
+    data.update(source_repository="wpv10barza/erp-mantto-esp32",
+                hardware="ESP32-S3-4848S040",
+                partition_table="partitions_ota_16mb.csv",
+                credential_mode="ota3c-nvs")
     manifest.write_text(json.dumps(data), encoding="utf-8")
     store = FirmwareOtaStore(str(tmp_path))
     release, resolved = store.by_commit("aaaaaaa")
@@ -131,6 +135,10 @@ def test_commit_route_is_authorized_and_does_not_fall_back_to_latest(
     manifest = tmp_path / "stable" / "2.7.0" / "manifest.json"
     data = json.loads(manifest.read_text(encoding="utf-8"))
     data["source_sha"] = "a" * 40
+    data.update(source_repository="wpv10barza/erp-mantto-esp32",
+                hardware="ESP32-S3-4848S040",
+                partition_table="partitions_ota_16mb.csv",
+                credential_mode="ota3c-nvs")
     manifest.write_text(json.dumps(data), encoding="utf-8")
     monkeypatch.setattr(backend, "settings",
                         replace(backend.settings, esp32_api_token="ci-device-token"))
@@ -146,3 +154,16 @@ def test_commit_route_is_authorized_and_does_not_fall_back_to_latest(
     not_published = client.get(
         "/api/device/v1/firmware/by-commit/" + "b" * 40, headers=authorized)
     assert not_published.status_code == 404
+
+def test_wrong_firmware_family_cannot_be_installed_by_commit(tmp_path: Path) -> None:
+    make_release(tmp_path, "2.9.0")
+    release_manifest = tmp_path / "stable" / "2.9.0" / "manifest.json"
+    data = json.loads(release_manifest.read_text(encoding="utf-8"))
+    data["source_sha"] = "a" * 40
+    data["source_repository"] = "wpv10barza/firmware-demo"
+    data["hardware"] = "ESP32-S3-4848S040"
+    data["partition_table"] = "partitions_ota_16mb.csv"
+    data["credential_mode"] = "ota3c-nvs"
+    release_manifest.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(FirmwareOtaError, match="no tiene firmware"):
+        FirmwareOtaStore(str(tmp_path)).by_commit("aaaaaaa")
