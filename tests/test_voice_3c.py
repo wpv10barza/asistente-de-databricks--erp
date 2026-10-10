@@ -250,3 +250,53 @@ def test_voice_mirror_write_error_fails_closed(tmp_path):
     store = VoiceDraftStore(path=str(obstructed / "voice.json"))
     with pytest.raises(VoiceStoreUnavailable):
         store.queue(DEVICE, "No editar Sheets", "request-write-error")
+
+
+
+def test_physical_voice_button_request_claim_and_idempotent_status(app_client):
+    endpoint = "/api/device/v1/voice/capture/request"
+    payload = {"device_id": DEVICE}
+    assert app_client.post(endpoint, json=payload).status_code == 401
+    created = app_client.post(endpoint, headers=AUTH, json=payload)
+    assert created.status_code == 202
+    assert created.json()["requires_windows_agent"] is True
+    assert created.json()["sheets_modified"] is False
+    request_id = created.json()["capture_id"]
+
+    duplicate = app_client.post(endpoint, headers=AUTH, json=payload)
+    assert duplicate.json()["duplicate"] is True
+    assert duplicate.json()["capture_id"] == request_id
+    next_url = "/api/device/v1/voice/capture/next"
+    assert app_client.get(next_url, params={"device_id": DEVICE}).status_code == 401
+    claimed = app_client.get(next_url, headers=AUTH, params={"device_id": DEVICE})
+    assert claimed.status_code == 200
+    assert claimed.json()["capture"]["id"] == request_id
+    assert claimed.json()["capture"]["status"] == "claimed"
+    assert app_client.get(next_url, headers=AUTH,
+                          params={"device_id": DEVICE}).json()["capture"] is None
+
+    complete = app_client.post(
+        f"/api/device/v1/voice/capture/{request_id}/complete",
+        headers=AUTH, json={"device_id": DEVICE, "success": True})
+    assert complete.status_code == 200
+    assert complete.json()["status"] == "completed"
+    assert complete.json()["sheets_modified"] is False
+    assert app_client.get("/api/device/v1/voice/sync", headers=AUTH,
+                          params={"device_id": DEVICE}).json()["capture_status"] == "completed"
+
+    again = app_client.post(endpoint, headers=AUTH, json=payload)
+    assert again.status_code == 202
+    assert again.json()["capture_id"] != request_id
+
+
+def test_voice_button_capture_mirror_survives_backend_restart(tmp_path):
+    file = str(tmp_path / "mirror" / "voice.json")
+    before = VoiceDraftStore(path=file)
+    capture, duplicate = before.request_capture(DEVICE)
+    assert duplicate is False
+    after = VoiceDraftStore(path=file)
+    claimed = after.claim_capture(DEVICE)
+    assert claimed is not None and claimed["id"] == capture["id"]
+    assert VoiceDraftStore(path=file).claim_capture(DEVICE) is None
+    assert VoiceDraftStore(path=file).finish_capture(DEVICE, capture["id"], False)["status"] == "failed"
+    assert VoiceDraftStore(path=file).sync(DEVICE)["capture_status"] == "failed"
