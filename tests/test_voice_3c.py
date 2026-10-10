@@ -44,6 +44,17 @@ def test_voice_drafts_are_for_editor_not_sheets(app_client):
                           json={"device_id": DEVICE})
     assert ack.status_code == 200
     assert ack.json()["sheets_modified"] is False
+    status = app_client.get(
+        "/api/device/v1/voice/drafts/" + draft["id"], headers=AUTH,
+        params={"device_id": DEVICE},
+    )
+    assert status.status_code == 200
+    assert status.json()["status"] == "delivered_to_editor"
+    assert status.json()["sheets_modified"] is False
+    assert app_client.get(
+        "/api/device/v1/voice/drafts/" + draft["id"], headers=AUTH,
+        params={"device_id": "another-device"},
+    ).status_code == 404
     assert app_client.get("/api/device/v1/voice/inbox/panel", headers=AUTH,
                           params={"device_id": DEVICE}).text == ""
 
