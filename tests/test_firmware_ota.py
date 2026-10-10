@@ -72,7 +72,8 @@ def test_http_ota_routes_never_mask_missing_manifest_as_404(
     from fastapi.testclient import TestClient
     from app import main as backend
 
-    monkeypatch.setattr(backend.settings, "esp32_api_token", "local-test-token")
+    from dataclasses import replace
+    monkeypatch.setattr(backend, "settings", replace(backend.settings, esp32_api_token="local-test-token"))
     monkeypatch.setattr(backend, "firmware_ota", FirmwareOtaStore(str(tmp_path)))
     client = TestClient(backend.app)
     headers = {"X-3C-Device-Token": "local-test-token"}
