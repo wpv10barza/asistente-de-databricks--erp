@@ -317,3 +317,51 @@ def test_new_dictation_replaces_only_old_undelivered_drafts():
     assert store.next(DEVICE)["id"] == latest["id"]
     repeated, duplicate = store.queue(DEVICE, "Inspeccion mensual", "old-transcript")
     assert duplicate is True and repeated["id"] == old["id"]
+
+
+
+def test_pc_agent_auto_routes_physical_panel_id_not_legacy_default(app_client):
+    actual_id = "panel-4848s040-3c-ota-2f26ec3f"
+    created = app_client.post(
+        "/api/device/v1/voice/capture/request",
+        headers=AUTH, json={"device_id": actual_id}
+    )
+    assert created.status_code == 202
+    next_url = "/api/device/v1/voice/capture/next"
+    assert app_client.get(next_url).status_code == 401
+    claimed = app_client.get(next_url, headers=AUTH)
+    assert claimed.status_code == 200
+    assert claimed.json()["capture"]["device_id"] == actual_id
+    assert claimed.json()["capture"]["id"] == created.json()["capture_id"]
+    assert app_client.get(next_url, headers=AUTH).json()["capture"] is None
+    queued = app_client.post(
+        "/api/device/v1/voice/drafts", headers=AUTH,
+        json={"device_id": claimed.json()["capture"]["device_id"],
+              "text": "Cambiar inspección de aterramiento a dos meses",
+              "request_id": "capture-auto-routed"}
+    )
+    assert queued.status_code == 202
+    wrong = app_client.get("/api/device/v1/voice/inbox/panel",
+                           headers=AUTH, params={"device_id": DEVICE})
+    assert wrong.text == ""
+    actual = app_client.get("/api/device/v1/voice/inbox/panel",
+                            headers=AUTH, params={"device_id": actual_id})
+    assert "Cambiar inspección" in actual.text
+
+
+def test_pc_agent_auto_route_ambiguous_panels_fails_closed(app_client):
+    for target in ("panel-alpha", "panel-beta"):
+        response = app_client.post(
+            "/api/device/v1/voice/capture/request", headers=AUTH,
+            json={"device_id": target}
+        )
+        assert response.status_code == 202
+    next_url = "/api/device/v1/voice/capture/next"
+    ambiguous = app_client.get(next_url, headers=AUTH)
+    assert ambiguous.status_code == 409
+    # Neither device is claimed until the operator explicitly chooses.
+    for target in ("panel-alpha", "panel-beta"):
+        claim = app_client.get(next_url, headers=AUTH,
+                               params={"device_id": target})
+        assert claim.status_code == 200
+        assert claim.json()["capture"]["device_id"] == target
