@@ -116,3 +116,50 @@ def test_invalid_editor_message_is_rejected():
     for text in ("", "x" * 231, "A\n" * 130):
         with pytest.raises(VoiceError):
             safe_command(text)
+
+
+def test_gemini_provider_503_contains_only_safe_status(app_client, monkeypatch):
+    from app.voice_3c import VoiceProviderError
+
+    def unavailable(*args):
+        raise VoiceProviderError(429, "RESOURCE_EXHAUSTED")
+
+    monkeypatch.setattr(backend, "transcribe_with_gemini", unavailable)
+    audio = base64.b64encode(b"RIFF" + b"0" * 512).decode()
+    response = app_client.post("/api/device/v1/voice/transcribe", headers=AUTH, json={
+        "audio_base64": audio, "mime_type": "audio/wav",
+    })
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["provider_http"] == 429
+    assert detail["provider_status"] == "RESOURCE_EXHAUSTED"
+    assert "cuota" in detail["hint"].lower()
+    assert "key" not in str(detail).lower()
+
+
+def test_gemini_probe_requires_live_inference(app_client, monkeypatch):
+    from app.voice_3c import VoiceProviderError
+    assert app_client.post("/api/device/v1/voice/probe").status_code == 401
+
+    monkeypatch.setattr(backend, "probe_gemini", lambda key, model: True)
+    good = app_client.post("/api/device/v1/voice/probe", headers=AUTH)
+    assert good.status_code == 200
+    assert good.json()["inference_confirmed"] is True
+    assert good.json()["audio_transcribed"] is False
+    assert good.json()["sheets_modified"] is False
+
+    def missing_model(key, model):
+        raise VoiceProviderError(404, "NOT_FOUND")
+
+    monkeypatch.setattr(backend, "probe_gemini", missing_model)
+    bad = app_client.post("/api/device/v1/voice/probe", headers=AUTH)
+    assert bad.status_code == 502
+    assert bad.json()["detail"]["provider_http"] == 404
+
+
+def test_gemini_provider_error_never_serializes_sensitive_details():
+    from app.voice_3c import VoiceProviderError
+    err = VoiceProviderError(403, "PERMISSION_DENIED")
+    detail = err.public_detail()
+    assert set(detail) == {"error", "provider_http", "provider_status", "hint"}
+    assert "GEMINI_UPSTREAM_ERROR" == detail["error"]
