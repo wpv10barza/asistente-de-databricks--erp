@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from .column_map import SHEET_HEADERS_A_AF, WRITE_COLUMNS
@@ -14,6 +14,7 @@ from .google_sheets import SheetsError, SheetsGateway
 from .indexer import SemanticIndex
 from .interpreter import interpret_command
 from .review_store import ReviewStore
+from .history_store import HistoryStore, panel_lines
 from .sheet_index import LiveSheetIndex
 
 
@@ -29,6 +30,7 @@ semantic_index = SemanticIndex.load()
 sheet_index = LiveSheetIndex()
 device_commands = DeviceCommandStore()
 review_store = ReviewStore()
+history_store = HistoryStore(settings.history_log_path)
 firmware_ota = FirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
 
 
@@ -257,12 +259,21 @@ def extract(item: ExtractRequest) -> dict:
 @app.post("/api/review/proposals", status_code=201)
 def create_review_proposal(item: ReviewProposalRequest) -> dict:
     try:
-        return review_store.propose(
+        proposal = review_store.propose(
             row=item.row,
             matched=item.matched,
             operations=[operation.model_dump() for operation in item.operations],
             external_command_id=item.external_command_id,
         )
+        if item.external_command_id:
+            history_store.append(
+                "proposal_preview", command_id=item.external_command_id,
+                proposal_id=proposal["id"],
+                changes=[{"cell": f"{op['columna_actualizar']}{item.row}",
+                          "value": str(op["valor_actualizar"])[:180]}
+                         for op in proposal["operations"]],
+            )
+        return proposal
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -309,7 +320,11 @@ def reject_review_proposal(proposal_id: str) -> dict:
         proposal = review_store.reject(proposal_id)
         command_id = proposal.get("external_command_id")
         if command_id:
-            device_commands.update(command_id, "rejected", "Rechazado por revisión humana.")
+            updated = device_commands.update(command_id, "rejected", "Rechazado por revisión humana.")
+            history_store.append(
+                "command_rejected", command_id=command_id,
+                device_id=updated["device_id"] if updated else "",
+            )
         return proposal
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -337,13 +352,24 @@ def apply_review_proposal(proposal_id: str) -> dict:
         ]
         google_result = gateway.batch_update_cells(changes)
         applied = review_store.mark_applied(proposal_id)
+        command_id = applied.get("external_command_id")
+        history_store.append(
+            "sheet_applied", proposal_id=proposal_id,
+            command_id=command_id, row=applied["row"],
+            changes=[{"cell": cell, "value": str(value)[:180]}
+                     for cell, value in changes],
+        )
 
         command_id = applied.get("external_command_id")
         if command_id:
-            device_commands.update(
+            updated = device_commands.update(
                 command_id,
                 "applied",
                 f"Propuesta {proposal_id} aplicada.",
+            )
+            history_store.append(
+                "command_applied", command_id=command_id,
+                device_id=updated["device_id"] if updated else "",
             )
 
         return {
@@ -423,6 +449,11 @@ def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict
     try:
         normalized = normalize_device_command(item.model_dump())
         command, duplicate = device_commands.enqueue(normalized)
+        if not duplicate:
+            history_store.append(
+                "command_sent", command_id=command["id"],
+                device_id=command["device_id"], text=command["text"],
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -435,6 +466,18 @@ def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict
         "status_path": f"/api/device/v1/commands/{command['id']}",
         "message": "Comando recibido para revisión humana.",
     }
+
+
+@app.get("/api/device/v1/history")
+def get_device_history(request: Request, device_id: str = "", limit: int = 8) -> dict:
+    _device_authorization(request)
+    return history_store.recent(device_id=device_id, limit=limit)
+
+
+@app.get("/api/device/v1/history/panel", response_class=PlainTextResponse)
+def get_device_history_panel(request: Request, device_id: str = "", limit: int = 8) -> str:
+    _device_authorization(request)
+    return panel_lines(history_store.recent(device_id=device_id, limit=limit))
 
 
 @app.get("/api/device/v1/commands/pending")

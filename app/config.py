@@ -28,6 +28,8 @@ class Settings:
 
     ota_volume_path: str = os.getenv("OTA_VOLUME_PATH", "")
     ota_channel: str = os.getenv("OTA_CHANNEL", "stable")
+    # Use a mounted Databricks Volume path for durable JSONL audit.
+    history_log_path: str = os.getenv("HISTORY_LOG_PATH", "")
 
     @property
     def sheet_auth_mode(self) -> str:

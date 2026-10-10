@@ -101,3 +101,15 @@ Para el primer despliegue el workflow es manual (`workflow_dispatch`) por seguri
 Primero despliegue sin secretos. Deben funcionar `/`, `/docs`, `/api/health` y el índice Pocket.
 
 Después agregue secretos de Databricks para Gemini, Google Service Account y Device API. Mantenga escritura desactivada hasta validar lectura, cabeceras y guardas.
+
+## Historial de ordenes 3C y Google Sheets (ESP32)
+
+Nuevo endpoint autenticado con `X-3C-Device-Token`:
+
+- `GET /api/device/v1/history?device_id=PANEL_ID&limit=8`: ordenes enviadas, estados, vistas previas vinculadas y modificaciones confirmadas (fila, celda, valor nuevo y fecha).
+- `GET /api/device/v1/history/panel?device_id=PANEL_ID&limit=8`: filas TSV limitadas para la pantalla 480×480, sin bloquear la UI.
+
+Una orden `pending_confirmation` es **solo recibida**, no implica escritura. Los eventos `sheet_applied` se registran unicamente despues de que Google Sheets responde correctamente a `batch_update_cells`. Una vista previa muestra valores propuestos y nunca se etiqueta como aplicada.
+
+**Durabilidad:** configure `HISTORY_LOG_PATH=/Volumes/.../history/3c-audit.jsonl` en la aplicación Databricks (ruta real montada y con permiso de escritura) para preservar un registro JSONL entre reinicios. Sin volumen configurado, el historial es **solo de la sesión del proceso** y no debe usarse como auditoría histórica completa. Los datos previos a esta función no se reconstruyen automáticamente. Proteja el volumen porque conserva valores de celdas.
+
