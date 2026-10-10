@@ -396,6 +396,28 @@ def latest_device_firmware(request: Request) -> dict:
     }
 
 
+@app.get("/api/device/v1/firmware/commits/{commit_sha}")
+def firmware_by_git_commit(commit_sha: str, request: Request) -> dict:
+    _device_authorization(request)
+    try:
+        release = firmware_ota.release_for_commit(commit_sha)
+    except FirmwareOtaError as exc:
+        message = str(exc)
+        lowered = message.lower()
+        status = (400 if "sha inválido" in lowered
+                  else 409 if "ambiguo" in lowered
+                  else 404 if "no existe firmware" in lowered
+                  else 503)
+        raise HTTPException(status_code=status, detail=message) from exc
+    return {
+        **release.public(),
+        "channel": settings.ota_channel,
+        "transport": "https",
+        "verification": "sha256",
+        "selection": "git_commit",
+    }
+
+
 @app.get("/api/device/v1/firmware/{version}.bin")
 def download_device_firmware(version: str, request: Request) -> FileResponse:
     _device_authorization(request)

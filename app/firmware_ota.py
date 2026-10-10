@@ -10,6 +10,8 @@ from pathlib import Path
 
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+COMMIT_RE = re.compile(r"^[0-9a-fA-F]{8,40}$")
+FULL_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class FirmwareOtaError(RuntimeError):
@@ -22,14 +24,18 @@ class FirmwareRelease:
     sha256: str
     size: int
     path: Path
+    git_commit_sha: str = ""
 
     def public(self) -> dict:
-        return {
+        result = {
             "version": self.version,
             "sha256": self.sha256.lower(),
             "size": self.size,
             "url": f"/api/device/v1/firmware/{self.version}.bin",
         }
+        if self.git_commit_sha:
+            result["git_commit_sha"] = self.git_commit_sha
+        return result
 
 
 class FirmwareOtaStore:
@@ -98,7 +104,40 @@ class FirmwareOtaStore:
             sha256=sha256,
             size=size,
             path=release.path,
+            git_commit_sha=release.git_commit_sha,
         )
+
+    def release_for_commit(self, requested_sha: str) -> FirmwareRelease:
+        """Select only an explicitly published, integrity-checked release.
+        
+        An 8+ character prefix must resolve unambiguously. Never download
+        GitHub source or workflow artifacts directly from the ESP32.
+        """
+        prefix = requested_sha.strip().lower()
+        if not COMMIT_RE.fullmatch(prefix):
+            raise FirmwareOtaError("Commit SHA inválido: use 8 a 40 caracteres hexadecimales.")
+        channel_dir = self._channel_dir()
+        if not channel_dir.is_dir():
+            raise FirmwareOtaError("No existe el canal OTA publicado.")
+        versions = []
+        for directory in channel_dir.iterdir():
+            if not directory.is_dir() or not VERSION_RE.fullmatch(directory.name):
+                continue
+            manifest_path = directory / "manifest.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(manifest, dict):
+                continue
+            sha = str(manifest.get("git_commit_sha", "")).strip().lower()
+            if FULL_COMMIT_RE.fullmatch(sha) and sha.startswith(prefix):
+                versions.append(directory.name)
+        if not versions:
+            raise FirmwareOtaError("No existe firmware OTA publicado para ese commit.")
+        if len(versions) > 1:
+            raise FirmwareOtaError("Commit ambiguo: ingrese el SHA completo.")
+        return self.release(versions[0])
 
     def release(self, version: str) -> FirmwareRelease:
         candidate = self._validate_version(version)
@@ -125,6 +164,9 @@ class FirmwareOtaStore:
             raise FirmwareOtaError("manifest.json contiene SHA-256 inválido.")
         if str(manifest.get("version", "")).strip() != candidate:
             raise FirmwareOtaError("La versión del manifiesto no coincide.")
+        commit_sha = str(manifest.get("git_commit_sha", "")).strip().lower()
+        if commit_sha and not FULL_COMMIT_RE.fullmatch(commit_sha):
+            raise FirmwareOtaError("git_commit_sha debe ser SHA de 40 caracteres.")
 
         size = binary_path.stat().st_size
         if size <= 0:
@@ -147,4 +189,5 @@ class FirmwareOtaStore:
             raise FirmwareOtaError(
                 "SHA-256 real del firmware no coincide con manifest.json."
             )
-        return FirmwareRelease(version=candidate, sha256=sha256, size=size, path=binary_path)
+        return FirmwareRelease(version=candidate, sha256=sha256, size=size,
+                               path=binary_path, git_commit_sha=commit_sha)

@@ -91,3 +91,48 @@ def test_rejects_manifest_version_mismatch(tmp_path: Path) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(FirmwareOtaError, match="versión del manifiesto"):
         FirmwareOtaStore(str(tmp_path)).release("1.0.1")
+
+def test_find_published_release_by_full_sha_or_prefix(tmp_path: Path) -> None:
+    sha = "a4b4144c6d96aedf8ca6a78f9b7adf7a436c0b0e"
+    make_release(tmp_path)
+    manifest_path = tmp_path / "stable" / "1.0.1" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["git_commit_sha"] = sha
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    store = FirmwareOtaStore(str(tmp_path))
+    assert store.release_for_commit(sha).git_commit_sha == sha
+    assert store.release_for_commit("a4b4144c").version == "1.0.1"
+    assert store.release_for_commit("a4b4144c").public()["git_commit_sha"] == sha
+
+
+def test_unknown_or_non_hex_commit_cannot_fallback_to_latest(tmp_path: Path) -> None:
+    make_release(tmp_path)
+    store = FirmwareOtaStore(str(tmp_path))
+    with pytest.raises(FirmwareOtaError, match="No existe firmware"):
+        store.release_for_commit("a4b4144c")
+    with pytest.raises(FirmwareOtaError, match="SHA inválido"):
+        store.release_for_commit("../../etc/passwd")
+
+
+def test_ambiguous_prefix_fails_closed(tmp_path: Path) -> None:
+    sha_one = "a4b4144c" + "1" * 32
+    sha_two = "a4b4144c" + "2" * 32
+    for version, sha in (("1.0.1", sha_one), ("1.0.2", sha_two)):
+        make_release(tmp_path, version=version)
+        path = tmp_path / "stable" / version / "manifest.json"
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        obj["git_commit_sha"] = sha
+        path.write_text(json.dumps(obj), encoding="utf-8")
+    with pytest.raises(FirmwareOtaError, match="ambiguo"):
+        FirmwareOtaStore(str(tmp_path)).release_for_commit("a4b4144c")
+
+
+def test_commit_lookup_also_checks_real_binary_digest(tmp_path: Path) -> None:
+    make_release(tmp_path, payload=b"abcdefgh")
+    path = tmp_path / "stable" / "1.0.1" / "manifest.json"
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    obj["git_commit_sha"] = "a4b4144c6d96aedf8ca6a78f9b7adf7a436c0b0e"
+    path.write_text(json.dumps(obj), encoding="utf-8")
+    (tmp_path / "stable" / "1.0.1" / "firmware.bin").write_bytes(b"abcdefgh"[:4] + b"ZZZZ")
+    with pytest.raises(FirmwareOtaError, match="SHA-256 real"):
+        FirmwareOtaStore(str(tmp_path)).release_for_commit("a4b4144c")
