@@ -91,6 +91,15 @@ class VoiceDraftAck(BaseModel):
     device_id: str
 
 
+class VoiceCaptureRequest(BaseModel):
+    device_id: str
+
+
+class VoiceCaptureCompletion(BaseModel):
+    device_id: str
+    success: bool
+
+
 class ExtractRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     detectedHeaders: dict[str, str] = Field(default_factory=dict)
@@ -667,6 +676,48 @@ def voice_cloud_mirror_status(request: Request, device_id: str) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except VoiceStoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/device/v1/voice/capture/request", status_code=202)
+def request_windows_voice_capture(item: VoiceCaptureRequest, request: Request) -> dict:
+    """The ESP32 touch button requests dictation; it never accesses PC mic directly."""
+    _device_authorization(request)
+    try:
+        capture, duplicate = voice_drafts.request_capture(item.device_id)
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"capture_id": capture["id"], "status": capture["status"],
+            "duplicate": duplicate, "requires_windows_agent": True,
+            "requires_local_review": True, "sheets_modified": False}
+
+
+@app.get("/api/device/v1/voice/capture/next")
+def next_windows_voice_capture(request: Request, device_id: str) -> dict:
+    _device_authorization(request)
+    try:
+        return {"capture": voice_drafts.claim_capture(device_id), "sheets_modified": False}
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/device/v1/voice/capture/{capture_id}/complete")
+def complete_windows_voice_capture(
+    capture_id: str, item: VoiceCaptureCompletion, request: Request,
+) -> dict:
+    _device_authorization(request)
+    try:
+        result = voice_drafts.finish_capture(item.device_id, capture_id, item.success)
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not result:
+        raise HTTPException(status_code=404, detail="Solicitud inexistente o no reclamada")
+    return {"status": result["status"], "sheets_modified": False}
 
 
 @app.get("/api/device/v1/voice/inbox/panel", response_class=PlainTextResponse)
