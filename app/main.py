@@ -136,10 +136,57 @@ def home() -> str:
           <li><a href="/api/health">Health</a></li>
           <li><a href="/api/index/status">Índice Pocket</a></li>
           <li><a href="/api/device/v1/health">Device API</a></li>
+          <li><a href="/voice-3c">Modulo IA / Voz 3C (Windows a ESP32)</a></li>
         </ul>
         <p>Google Sheets escribe solo si existe aprobación humana y ALLOW_SHEET_WRITE=true.</p>
       </body>
     </html>
+    """
+
+
+@app.get("/voice-3c", response_class=HTMLResponse)
+def voice_3c_section() -> str:
+    """Dedicated Databricks Apps module landing page. No credentials rendered."""
+    return """
+    <!doctype html><html lang="es"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Voz 3C - Databricks ERP</title>
+    <style>
+      body{font-family:system-ui,sans-serif;max-width:900px;margin:35px auto;padding:0 20px;line-height:1.6;color:#142431}
+      article{border:1px solid #ccd5da;border-radius:16px;padding:22px;margin:16px 0}
+      code{background:#e9eff2;padding:2px 5px;border-radius:5px}
+      a{color:#0563a5}
+    </style></head><body>
+    <p><a href="/">Volver a Asistente 3C</a></p>
+    <h1>Modulo IA - Voz 3C</h1>
+    <article>
+      <h2>Del micrófono de Windows al ESP32</h2>
+      <p>PowerShell envía audio WAV/MP3 a Gemini en Databricks.
+      El texto se almacena como borrador temporal y el ESP32 lo muestra en
+      <strong>EDITAR ORDEN 3C</strong>. No se ejecuta automáticamente.</p>
+      <p>Voz / Gemini → borrador autenticado → pantalla ESP32 →
+      confirmación táctil → Device API → revisión humana → Google Sheets.</p>
+      <p>Repositorio y scripts:
+      <a href="https://github.com/wpv10barza/voice-embeding-in-databricks-for-esp32">
+      voice-embeding-in-databricks-for-esp32</a></p>
+    </article>
+    <article>
+      <h2>Pruebas de conexión</h2>
+      <p>La prueba <code>GET /api/device/v1/cloud/verify</code> valida una lectura real
+      de los encabezados de la hoja Data de Google Sheets.
+      La API de voz necesita OAuth Databricks y token Device API.</p>
+      <p><code>GET /api/device/v1/voice/health</code> informa configuración,
+      no transcripción real. Para verificar reconocimiento envíe un WAV con PowerShell.</p>
+      <p>Los scripts de PowerShell permiten probar tanto la nube como la entrega
+      física al editor del ESP32.</p>
+    </article>
+    <article>
+      <h2>Seguridad y alcance</h2>
+      <p>Nunca se modifica Google Sheets directamente desde un audio.
+      La bandeja actual tiene TTL de 15 minutos y memoria por proceso, por lo
+      que no garantiza entregas entre reinicios o varias réplicas.</p>
+    </article>
+    </body></html>
     """
 
 
