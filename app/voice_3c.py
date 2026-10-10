@@ -84,6 +84,15 @@ class VoiceDraftStore:
                     return self._public(d)
         return None
 
+    def get(self, device_id: str, draft_id: str) -> dict | None:
+        device_id = safe_device_id(device_id)
+        with self._lock:
+            self._prune()
+            for d in self._drafts:
+                if d["device_id"] == device_id and d["id"] == draft_id:
+                    return self._public(d)
+        return None
+
     def ack(self, device_id: str, draft_id: str) -> dict | None:
         device_id = safe_device_id(device_id)
         with self._lock:
