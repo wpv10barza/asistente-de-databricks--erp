@@ -16,7 +16,7 @@ from .interpreter import interpret_command
 from .review_store import ReviewStore
 from .history_store import HistoryStore, panel_lines
 from .sheet_index import LiveSheetIndex
-from .voice_3c import VoiceDraftStore, VoiceError, VoiceProviderError, decode_audio, transcribe_with_gemini, probe_gemini, safe_device_id
+from .voice_3c import VoiceDraftStore, VoiceError, VoiceProviderError, decode_audio, transcribe_with_gemini, probe_gemini, list_accessible_gemini_models, safe_device_id
 
 
 app = FastAPI(
@@ -498,6 +498,32 @@ def voice_health(request: Request) -> dict:
         "local_confirmation_required": True,
         "sheets_write_performed": False,
         "queue_scope": "single_app_process_ttl_15_min",
+    }
+
+
+@app.get("/api/device/v1/voice/models")
+def voice_available_models(request: Request) -> dict:
+    """Read Gemini's listModels with the configured key (no inference)."""
+    _device_authorization(request)
+    try:
+        visible = list_accessible_gemini_models(settings.gemini_api_key)
+    except VoiceProviderError as exc:
+        raise HTTPException(
+            status_code=503 if exc.provider_code >= 500 else 502,
+            detail=exc.public_detail(),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail={
+            "error": "GEMINI_NOT_CONFIGURED",
+            "hint": "Revisar recurso GEMINI_API_KEY de Databricks Apps.",
+        }) from exc
+    return {
+        "ok": True,
+        "configured_model": settings.voice_gemini_model,
+        "visible_models": visible,
+        "configured_model_visible": settings.voice_gemini_model in visible,
+        "visibility_is_not_inference": True,
+        "sheets_modified": False,
     }
 
 
