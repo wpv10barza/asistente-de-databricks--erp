@@ -181,3 +181,36 @@ Despliegue el backend nuevo en **asistente-cloud-erp** y consulte con
 el cliente de voz scripts/Diagnosticar-Mirror3C.ps1. El commit de GitHub
 y CI exitosa no equivalen a un despliegue en Databricks.
 La revision tactil y ALLOW_SHEET_WRITE=false se mantienen intactos.
+
+
+## Captura 3C desde boton fisico ESP32 (requiere agente Windows voluntario)
+
+El nuevo boton tactil DICTAR PC dentro de EDITAR ORDEN 3C
+envia solo una peticion autenticada a
+POST /api/device/v1/voice/capture/request con el device_id configurado
+internamente (NO es una clave secreta). La solicitud se almacena como
+pending y un agente Windows, iniciado expresamente por el operador,
+la reclama por GET /api/device/v1/voice/capture/next?device_id=... .
+El PC graba el microfono seleccionado, transcribe con Gemini alojado
+en Databricks y envia un borrador a /voice/drafts. El ESP32 consulta
+/voice/inbox/panel, abre el texto en el editor y envia ACK. Solo
+despues del examen humano se permite ENVIAR 3C y la aprobacion
+separada de Google Sheets.
+
+No requiere puerto local entrante de Windows, no exige escribir
+device_id en la pantalla, no coloca secretos en QR ni en Git, y
+no graba si el agente no esta corriendo. Una peticion expira.
+El agente de PC debe tener credenciales existentes validas.
+El backend no controla directamente hardware de audio.
+
+La cola comparte VOICE_DRAFT_STORE_PATH: con Databricks UC Volume
+configurado en una instancia, sobrevive a reinicios; sin Volume
+queda en RAM. Un archivo JSON no ofrece exclusividad multinodo.
+Evite multiples agentes para un mismo device_id; una solicitud
+reclamada permanece reservada para ese proceso hasta su finalizacion
+o vencimiento.
+
+**No se habilita ALLOW_SHEET_WRITE**, ni se ejecuta una orden
+automatica al crear un borrador. Un 202 y queued_for_editor no
+implican entrega al panel: comprobar delivered_to_editor y
+voice_poll_http con el diagnostico del ESP32.
