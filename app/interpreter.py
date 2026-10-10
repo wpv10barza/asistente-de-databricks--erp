@@ -204,7 +204,6 @@ def interpret_command(
             model=settings.gemini_model,
             contents=build_prompt(text, detected_headers, detected_catalogs),
             config=types.GenerateContentConfig(
-                temperature=0,
                 response_mime_type="application/json",
             ),
         )
