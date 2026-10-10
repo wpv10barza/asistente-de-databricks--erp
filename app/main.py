@@ -10,6 +10,7 @@ from .column_map import SHEET_HEADERS_A_AF, WRITE_COLUMNS
 from .config import Settings
 from .device_store import DeviceCommandStore, normalize_device_command, verify_device_token
 from .firmware_ota import FirmwareOtaError, FirmwareOtaStore
+from .firmware_uc_volume import UcVolumeFirmwareOtaStore
 from .google_sheets import SheetsError, SheetsGateway
 from .indexer import SemanticIndex
 from .interpreter import interpret_command
@@ -29,7 +30,11 @@ semantic_index = SemanticIndex.load()
 sheet_index = LiveSheetIndex()
 device_commands = DeviceCommandStore()
 review_store = ReviewStore()
-firmware_ota = FirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
+firmware_ota = (
+    UcVolumeFirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
+    if settings.ota_volume_path.strip().startswith("/Volumes/")
+    else FirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
+)
 
 
 class SearchRequest(BaseModel):
