@@ -16,7 +16,7 @@ from .interpreter import interpret_command
 from .review_store import ReviewStore
 from .history_store import HistoryStore, panel_lines
 from .sheet_index import LiveSheetIndex
-from .voice_3c import VoiceDraftStore, VoiceError, decode_audio, transcribe_with_gemini, safe_device_id
+from .voice_3c import VoiceDraftStore, VoiceError, VoiceProviderError, decode_audio, transcribe_with_gemini, probe_gemini, safe_device_id
 
 
 app = FastAPI(
@@ -501,6 +501,37 @@ def voice_health(request: Request) -> dict:
     }
 
 
+@app.post("/api/device/v1/voice/probe")
+def voice_provider_probe(request: Request) -> dict:
+    """Opt-in live API inference to distinguish a healthy app from Gemini availability."""
+    _device_authorization(request)
+    try:
+        success = probe_gemini(settings.gemini_api_key, settings.voice_gemini_model)
+    except VoiceProviderError as exc:
+        raise HTTPException(
+            status_code=503 if exc.provider_code in (429, 500, 502, 503, 504) else 502,
+            detail=exc.public_detail(),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail={
+            "error": "GEMINI_NOT_CONFIGURED",
+            "hint": "Comprobar enlace GEMINI_API_KEY en Databricks Apps.",
+        }) from exc
+    if not success:
+        raise HTTPException(status_code=502, detail={
+            "error": "GEMINI_EMPTY_RESPONSE",
+            "hint": "La API respondió pero no generó texto.",
+        })
+    return {
+        "ok": True,
+        "provider": "gemini",
+        "model": settings.voice_gemini_model,
+        "inference_confirmed": True,
+        "audio_transcribed": False,
+        "sheets_modified": False,
+    }
+
+
 @app.post("/api/device/v1/voice/transcribe")
 def voice_transcribe(item: VoiceTranscribeRequest, request: Request) -> dict:
     _device_authorization(request)
@@ -511,8 +542,16 @@ def voice_transcribe(item: VoiceTranscribeRequest, request: Request) -> dict:
         )
     except VoiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VoiceProviderError as exc:
+        raise HTTPException(
+            status_code=503 if exc.provider_code in (429, 500, 502, 503, 504) else 502,
+            detail=exc.public_detail(),
+        ) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail={
+            "error": "GEMINI_NOT_CONFIGURED",
+            "hint": "Comprobar enlace GEMINI_API_KEY en Databricks Apps.",
+        }) from exc
     return {
         "transcript": transcript,
         "model": settings.voice_gemini_model,
