@@ -72,82 +72,166 @@ class HistoryStore:
         return event
 
     def recent(self, device_id: str = "", limit: int = 8) -> dict:
+        """Audit summary is for retained history, never an all-time guarantee.
+
+        Only sheet_applied proves a successful Sheets API batch write.
+        Approval, submission, attempt, and rejection are separate events.
+        """
         limit = max(1, min(20, limit))
         with self._lock:
             events = list(self._events)
             persistent = self.persistent
-
         orders: dict[str, dict] = {}
-        changes: list[dict] = []
-        for event in events:
-            kind = event.get("type")
-            command_id = event.get("command_id")
-            if kind in {"command_sent", "command_applied", "command_rejected"}:
-                if device_id and event.get("device_id") != device_id:
-                    continue
-                item = orders.setdefault(command_id, {
-                    "command_id": command_id,
-                    "text": "",
-                    "status": "pending_confirmation",
-                    "created_at": event.get("at"),
-                    "updated_at": event.get("at"),
-                    "preview": [],
+        proposals: dict[str, dict] = {}
+        sheet_changes: list[dict] = []
+        activity: list[dict] = []
+        attempts = 0
+        blocked = 0
+        for ev in events:
+            typ = ev.get("type")
+            cmd_id = ev.get("command_id")
+            proposal_id = ev.get("proposal_id")
+            if typ == "command_sent" and cmd_id:
+                orders.setdefault(cmd_id, {
+                    "command_id": cmd_id, "text": ev.get("text", ""),
+                    "status": "pending_confirmation", "created_at": ev.get("at"),
+                    "updated_at": ev.get("at"), "preview": [],
                 })
-                if kind == "command_sent":
-                    item["text"] = event.get("text", "")
-                    item["created_at"] = event.get("at")
-                else:
-                    item["status"] = "applied" if kind == "command_applied" else "rejected"
-                item["updated_at"] = event.get("at")
-            elif kind == "proposal_preview" and command_id:
-                if command_id in orders:
-                    orders[command_id]["preview"] = event.get("changes", [])
-            elif kind == "sheet_applied":
-                changes.append({
-                    "at": event.get("at"),
-                    "proposal_id": event.get("proposal_id"),
-                    "command_id": command_id,
-                    "row": event.get("row"),
-                    "changes": event.get("changes", []),
-                    "status": "applied",
+            elif typ in ("command_applied", "command_rejected") and cmd_id:
+                if cmd_id in orders:
+                    orders[cmd_id]["status"] = (
+                        "applied" if typ == "command_applied" else "rejected"
+                    )
+                    orders[cmd_id]["updated_at"] = ev.get("at")
+            if typ == "proposal_preview" and cmd_id in orders:
+                orders[cmd_id]["preview"] = ev.get("changes", [])
+            if typ == "proposal_created" and proposal_id:
+                proposals.setdefault(proposal_id, {
+                    "id": proposal_id,
+                    "status": "proposed", "row": ev.get("row"),
+                    "command_id": cmd_id, "changes": ev.get("changes", []),
+                    "created_at": ev.get("at"),
                 })
-        selected = sorted(orders.values(), key=lambda e: e["updated_at"], reverse=True)[:limit]
+            if typ in ("proposal_approved", "proposal_rejected", "sheet_applied") and proposal_id:
+                proposal = proposals.setdefault(proposal_id, {
+                    "id": proposal_id, "status": "proposed", "row": ev.get("row"),
+                    "command_id": cmd_id, "changes": ev.get("changes", []),
+                    "created_at": ev.get("at"),
+                })
+                proposal["status"] = {
+                    "proposal_approved": "approved",
+                    "proposal_rejected": "rejected",
+                    "sheet_applied": "applied",
+                }[typ]
+                if typ == "proposal_approved" and cmd_id in orders:
+                    orders[cmd_id]["status"] = "approved_not_applied"
+                    orders[cmd_id]["updated_at"] = ev.get("at")
+                elif typ == "proposal_rejected" and cmd_id in orders:
+                    orders[cmd_id]["status"] = "rejected"
+                    orders[cmd_id]["updated_at"] = ev.get("at")
+            if typ == "sheet_apply_attempt":
+                attempts += 1
+            elif typ == "sheet_apply_blocked":
+                blocked += 1
+            elif typ == "sheet_applied":
+                sheet_changes.append({
+                    "at": ev.get("at"), "proposal_id": proposal_id,
+                    "command_id": cmd_id, "row": ev.get("row"),
+                    "changes": ev.get("changes", []), "status": "applied",
+                })
+            if typ in {
+                "proposal_approved", "proposal_rejected",
+                "sheet_apply_attempt", "sheet_apply_blocked", "sheet_applied",
+            }:
+                activity.append({
+                    "at": ev.get("at"), "proposal_id": proposal_id,
+                    "command_id": cmd_id, "row": ev.get("row"),
+                    "status": {
+                        "proposal_approved": "approved_not_applied",
+                        "proposal_rejected": "rejected",
+                        "sheet_apply_attempt": "attempted_not_confirmed",
+                        "sheet_apply_blocked": "blocked_not_written",
+                        "sheet_applied": "applied",
+                    }[typ],
+                    "changes": ev.get("changes", []) or
+                               proposals.get(proposal_id, {}).get("changes", []),
+                    "reason": _clean(ev.get("reason", ""), 100),
+                })
+        # Command history is per device. Sheet audit is global to this backend.
+        # An all-time zero is never asserted if the audit store is not durable.
+        filtered_orders = []
+        commands_by_device = {
+            ev.get("command_id") for ev in events
+            if ev.get("type") == "command_sent" and (
+                not device_id or ev.get("device_id") == device_id
+            )
+        }
+        for cmd_id, item in orders.items():
+            if cmd_id in commands_by_device:
+                filtered_orders.append(item)
+        filtered_orders.sort(key=lambda e: e["updated_at"] or "", reverse=True)
+        summary = {
+            "commands": len(filtered_orders),
+            "approved": sum(p["status"] in ("approved", "applied") for p in proposals.values()),
+            "rejected": sum(p["status"] == "rejected" for p in proposals.values()),
+            "pending": sum(p["status"] == "proposed" for p in proposals.values()),
+            "apply_attempts": attempts,
+            "applied": len(sheet_changes),
+            "blocked": blocked,
+        }
         return {
-            "orders": selected,
-            "sheet_changes": list(reversed(changes))[:limit],
+            "orders": filtered_orders[:limit],
+            "sheet_changes": sheet_changes[::-1][:limit],
+            "sheet_activity": activity[::-1][:limit],
+            "summary": summary,
             "persistent": persistent,
             "scope": "persistent_audit" if persistent else "current_backend_session",
+            "sheet_activity_is_global": True,
             "sheet_changes_only_after_successful_batch_update": True,
         }
 
 
 def panel_lines(data: dict) -> str:
-    """Small authenticated TSV contract for an ESP32 without JSON allocation.
+    """Safe, compact 5-column TSV contract for the 480px panel.
 
-    Type, UTC time, status/cell, summary and ID. All fields are one line.
+    M row: approved, rejected, pending, attempts|applied|blocked,
+    scope. O = per-device command; S = global review/Sheet audit.
+    Approval/attempt are NEVER labelled as successful Sheets writes.
     """
-    rows = []
+    summary = data.get("summary", {})
+    meta = "\t".join([
+        "M", str(summary.get("approved", 0)), str(summary.get("rejected", 0)),
+        str(summary.get("pending", 0)) + "|" +
+        str(summary.get("apply_attempts", 0)) + "|" +
+        str(summary.get("applied", 0)) + "|" +
+        str(summary.get("blocked", 0)),
+        "PERSIST" if data.get("persistent") else "SESSION",
+    ])
+    rows = [meta]
     for order in data["orders"]:
         preview = order.get("preview") or []
-        preview_text = ""
-        if preview:
-            preview_text = " | ".join(
-                _clean(change.get("cell"), 12) + "=" + _clean(change.get("value"), 65)
-                for change in preview[:2]
-            )
+        preview_text = " | ".join(
+            _clean(change.get("cell"), 12) + "=" + _clean(change.get("value"), 65)
+            for change in preview[:2]
+        )
         rows.append("\t".join([
             "O", _clean(order.get("updated_at"), 26),
             _clean(order.get("status"), 26),
-            _clean(order.get("text"), 145),
-            _clean(preview_text, 145),
+            _clean(order.get("text"), 145), _clean(preview_text, 145),
         ]))
-    for applied in data["sheet_changes"]:
+    for event in data.get("sheet_activity", []):
         details = " | ".join(
-            _clean(change.get("cell"), 12) + "=" + _clean(change.get("value"), 90)
-            for change in applied["changes"][:2]
+            _clean(change.get("cell"), 12) + "=" + _clean(change.get("value"), 65)
+            for change in (event.get("changes") or [])[:2]
         )
+        if not details:
+            details = _clean(event.get("reason"), 100) or (
+                "Propuesta " + _clean(event.get("proposal_id"), 24)
+            )
         rows.append("\t".join([
-            "S", _clean(applied.get("at"), 26), "applied",
-            _clean(details, 145), _clean(applied.get("command_id") or "web", 60),
+            "S", _clean(event.get("at"), 26),
+            _clean(event.get("status"), 26), _clean(details, 145),
+            "Fila " + _clean(event.get("row"), 8) + " / " +
+            _clean(event.get("proposal_id"), 38),
         ]))
-    return "\n".join(rows) + ("\n" if rows else "")
+    return "\n".join(rows) + "\n"
