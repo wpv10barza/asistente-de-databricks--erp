@@ -694,12 +694,18 @@ def request_windows_voice_capture(item: VoiceCaptureRequest, request: Request) -
 
 
 @app.get("/api/device/v1/voice/capture/next")
-def next_windows_voice_capture(request: Request, device_id: str) -> dict:
+def next_windows_voice_capture(request: Request, device_id: str | None = None) -> dict:
     _device_authorization(request)
     try:
-        return {"capture": voice_drafts.claim_capture(device_id), "sheets_modified": False}
+        capture = (
+            voice_drafts.claim_capture(device_id) if device_id is not None
+            else voice_drafts.claim_unique_capture()
+        )
+        return {"capture": capture, "sheets_modified": False}
     except VoiceError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409 if device_id is None else 422, detail=str(exc)
+        ) from exc
     except VoiceStoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

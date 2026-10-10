@@ -247,6 +247,36 @@ class VoiceDraftStore:
                     return self._public(item)
         return None
 
+    def claim_unique_capture(self) -> dict | None:
+        """Claim a single authenticated pending panel request without guessing its ID.
+
+        If two distinct devices request recording, refuse auto-routing rather than
+        let the Windows PC record or deliver a transcript to an arbitrary panel.
+        """
+        with self._lock:
+            self._refresh()
+            now = time.time()
+            candidates = []
+            for item in self._captures:
+                if item.get("_created", 0) + 180 <= now:
+                    continue
+                if item.get("status") == "pending" or (
+                    item.get("status") == "claimed" and
+                    item.get("_claimed", 0) + 120 < now
+                ):
+                    candidates.append(item)
+            if len({item["device_id"] for item in candidates}) > 1:
+                raise VoiceError(
+                    "Multiples dispositivos solicitaron audio; especifique device_id."
+                )
+            if not candidates:
+                return None
+            item = candidates[0]
+            item["status"] = "claimed"
+            item["_claimed"] = now
+            self._save()
+            return self._public(item)
+
     def finish_capture(self, device_id: str, capture_id: str,
                        success: bool) -> dict | None:
         device_id = safe_device_id(device_id)
