@@ -54,12 +54,40 @@ class VoiceProviderError(RuntimeError):
 
 
 def _generate_gemini_content(*, client, model: str, contents):
-    from google.genai import errors, types
+    from google.genai import errors
     try:
-        return client.models.generate_content(
-            model=model, contents=contents,
-            config=types.GenerateContentConfig(temperature=0),
-        )
+        # Gemini 3.8 uses default sampling rather than legacy temperature=0.
+        return client.models.generate_content(model=model, contents=contents)
+    except errors.APIError as exc:
+        raise VoiceProviderError(exc.code, exc.status) from exc
+
+
+VOICE_CANDIDATE_MODELS = (
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+)
+
+
+def list_accessible_gemini_models(api_key: str) -> list[str]:
+    """Filter Gemini models visible to the app's key, no raw metadata/secrets."""
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY no está configurada")
+    from google import genai
+    from google.genai import errors
+
+    client = genai.Client(api_key=api_key)
+    try:
+        visible: set[str] = set()
+        for item in client.models.list():
+            name = str(getattr(item, "name", "") or "").removeprefix("models/")
+            actions = getattr(item, "supported_actions", None)
+            if name in VOICE_CANDIDATE_MODELS and (
+                actions is None or "generateContent" in actions
+            ):
+                visible.add(name)
+        return [model for model in VOICE_CANDIDATE_MODELS if model in visible]
     except errors.APIError as exc:
         raise VoiceProviderError(exc.code, exc.status) from exc
 
