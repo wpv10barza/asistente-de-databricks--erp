@@ -351,6 +351,7 @@ def apply_review_proposal(proposal_id: str) -> dict:
                 command_id,
                 "applied",
                 f"Propuesta {proposal_id} aplicada.",
+                changes=changes,
             )
 
         return {
@@ -489,6 +490,20 @@ def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict
 @app.get("/api/device/v1/commands/pending")
 def pending_device_command(after: str | None = None) -> dict:
     return {"command": device_commands.latest_pending(after)}
+
+
+@app.get("/api/device/v1/commands/history")
+def recent_device_command(
+    request: Request, device_id: str, offset: int = 0
+) -> dict:
+    _device_authorization(request)
+    if not device_id or len(device_id) > 64 or not all(
+        char.isalnum() or char in "._:-" for char in device_id
+    ):
+        raise HTTPException(status_code=400, detail="device_id inválido.")
+    if not 0 <= offset <= 49:
+        raise HTTPException(status_code=400, detail="offset fuera de rango.")
+    return device_commands.recent(device_id, offset)
 
 
 @app.get("/api/device/v1/commands/{command_id}")
