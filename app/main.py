@@ -16,6 +16,7 @@ from .interpreter import interpret_command
 from .review_store import ReviewStore
 from .history_store import HistoryStore, panel_lines
 from .sheet_index import LiveSheetIndex
+from .voice_3c import VoiceDraftStore, VoiceError, decode_audio, transcribe_with_gemini, safe_device_id
 
 
 app = FastAPI(
@@ -32,6 +33,7 @@ device_commands = DeviceCommandStore()
 review_store = ReviewStore()
 history_store = HistoryStore(settings.history_log_path)
 firmware_ota = FirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
+voice_drafts = VoiceDraftStore()
 
 
 class SearchRequest(BaseModel):
@@ -72,6 +74,21 @@ class SingleProposalRequest(BaseModel):
 
 class ApplyRequest(BaseModel):
     proposal_id: str
+
+
+class VoiceTranscribeRequest(BaseModel):
+    audio_base64: str = Field(min_length=100, max_length=1_400_000)
+    mime_type: str = Field(default="audio/wav", max_length=32)
+
+
+class VoiceDraftRequest(BaseModel):
+    device_id: str
+    text: str = Field(min_length=1, max_length=230)
+    request_id: str = Field(min_length=1, max_length=96)
+
+
+class VoiceDraftAck(BaseModel):
+    device_id: str
 
 
 class ExtractRequest(BaseModel):
@@ -386,6 +403,126 @@ def apply_review_proposal(proposal_id: str) -> dict:
 @app.post("/apply")
 def apply_by_id(item: ApplyRequest) -> dict:
     return apply_review_proposal(item.proposal_id)
+
+
+@app.get("/api/device/v1/cloud/verify")
+def device_cloud_verify(request: Request) -> dict:
+    """Authentically read Google Sheets headers; never write any cell.
+
+    Returning HTTP 200 always means the actual spreadsheet was read and
+    validated, unlike /api/health which only reports configuration.
+    """
+    _device_authorization(request)
+    try:
+        result = gateway.verify_template()
+    except SheetsError as exc:
+        raise HTTPException(status_code=502, detail="Google Sheets no accesible: " + str(exc)[:220]) from exc
+    if not result["ok"]:
+        raise HTTPException(status_code=409, detail={
+            "error": "Encabezados de la hoja no coinciden",
+            "sheet": result["sheet_name"],
+            "mismatches": result["mismatches"][:5],
+        })
+    return {
+        "ok": True,
+        "backend": "databricks",
+        "google_sheets": {
+            "connected": True,
+            "sheet_name": result["sheet_name"],
+            "header_row": result["header_row"],
+            "spreadsheet_id": result["spreadsheet_id"],
+            "auth_mode": result["auth_mode"],
+            "verified_by": "live_google_sheets_api_read",
+        },
+        "sheet_write_enabled": settings.allow_sheet_write,
+        "requires_human_confirmation": True,
+    }
+
+
+@app.get("/api/device/v1/voice/health")
+def voice_health(request: Request) -> dict:
+    _device_authorization(request)
+    return {
+        "ok": True,
+        "module": "voice-3c",
+        "transcription_model": settings.voice_gemini_model,
+        "model_configured": bool(settings.gemini_api_key),
+        "mode": "audio_to_draft_only",
+        "local_confirmation_required": True,
+        "sheets_write_performed": False,
+        "queue_scope": "single_app_process_ttl_15_min",
+    }
+
+
+@app.post("/api/device/v1/voice/transcribe")
+def voice_transcribe(item: VoiceTranscribeRequest, request: Request) -> dict:
+    _device_authorization(request)
+    try:
+        audio, mime_type = decode_audio(item.audio_base64, item.mime_type)
+        transcript = transcribe_with_gemini(
+            audio, mime_type, settings.gemini_api_key, settings.voice_gemini_model
+        )
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "transcript": transcript,
+        "model": settings.voice_gemini_model,
+        "requires_local_review": True,
+        "sent_to_esp32": False,
+        "sheets_modified": False,
+    }
+
+
+@app.post("/api/device/v1/voice/drafts", status_code=202)
+def enqueue_voice_draft(item: VoiceDraftRequest, request: Request) -> dict:
+    _device_authorization(request)
+    try:
+        draft, duplicate = voice_drafts.queue(item.device_id, item.text, item.request_id)
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "draft_id": draft["id"],
+        "status": draft["status"],
+        "duplicate": duplicate,
+        "requires_local_review": True,
+        "sheets_modified": False,
+    }
+
+
+@app.get("/api/device/v1/voice/inbox/panel", response_class=PlainTextResponse)
+def voice_panel_inbox(request: Request, device_id: str) -> str:
+    _device_authorization(request)
+    try:
+        draft = voice_drafts.next(device_id)
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not draft:
+        return ""
+    # Sanitize controls at enqueue so split-on-tab is unambiguous to the MCU.
+    return draft["id"] + "\t" + draft["text"] + "\n"
+
+
+@app.get("/api/device/v1/voice/inbox")
+def voice_inbox(request: Request, device_id: str) -> dict:
+    _device_authorization(request)
+    try:
+        return {"draft": voice_drafts.next(device_id)}
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/device/v1/voice/drafts/{draft_id}/ack")
+def acknowledge_voice_draft(draft_id: str, item: VoiceDraftAck, request: Request) -> dict:
+    _device_authorization(request)
+    try:
+        draft = voice_drafts.ack(item.device_id, draft_id)
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not draft:
+        raise HTTPException(status_code=404, detail="Borrador caducado o dispositivo distinto")
+    return {"status": draft["status"], "sheets_modified": False}
 
 
 @app.get("/api/device/v1/health")

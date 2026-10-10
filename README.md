@@ -113,3 +113,31 @@ Una orden `pending_confirmation` es **solo recibida**, no implica escritura. Los
 
 **Durabilidad:** configure `HISTORY_LOG_PATH=/Volumes/.../history/3c-audit.jsonl` en la aplicación Databricks (ruta real montada y con permiso de escritura) para preservar un registro JSONL entre reinicios. Sin volumen configurado, el historial es **solo de la sesión del proceso** y no debe usarse como auditoría histórica completa. Los datos previos a esta función no se reconstruyen automáticamente. Proteja el volumen porque conserva valores de celdas.
 
+
+## Módulo Voz 3C / Databricks / ESP32
+
+El módulo de voz se aloja en `app/voice_3c.py` y reutiliza la credencial
+`GEMINI_API_KEY` ya asignada a Databricks Apps. El modelo de transcripción
+configurable es `VOICE_GEMINI_MODEL=gemini-2.5-flash`.
+El cliente Windows y las instrucciones están en
+[voice-embeding-in-databricks-for-esp32](https://github.com/wpv10barza/voice-embeding-in-databricks-for-esp32).
+
+El micrófono o archivo WAV/MP3 se encuentra en Windows, nunca en el ESP32:
+`PowerShell -> Databricks (/voice/transcribe) -> borrador (/voice/drafts)
+-> ESP32 (/voice/inbox/panel) -> EDITAR ORDEN 3C -> envío manual -> revisión
+humana -> aprobación opcional de la propuesta Sheets`.
+
+La transcripción **nunca** ejecuta escritura ni envía automáticamente la
+orden. La bandeja solo conserva borradores durante 15 minutos en memoria
+del proceso de la App; se requiere una cola persistente/compartida para
+garantizar entrega en despliegues con múltiples réplicas o reinicios.
+No desplegar esa variante como entrega garantizada sin migrar el estado.
+
+`GET /api/device/v1/cloud/verify` exige el token del dispositivo y
+realiza lectura efectiva de `Data!A4:AF4`, validando los encabezados.
+HTTP 200 significa lectura y esquema correcto; HTTP 409, esquema distinto;
+HTTP 502, fallo de acceso. `/api/health` solo verifica la configuración
+y no prueba acceso real a Google Sheets.
+
+La App requiere OAuth Databricks Apps además de `X-3C-Device-Token`
+cuando el workspace lo solicite. No se almacenan tokens en Git.
