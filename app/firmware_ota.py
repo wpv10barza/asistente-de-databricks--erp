@@ -146,6 +146,13 @@ class FirmwareOtaStore:
                 data = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
+            # Only the primary 3C HMI, compiled for the dual-slot 16MB
+            # layout with credential-preserving NVS, can be installed on it.
+            if (data.get("source_repository") != "wpv10barza/erp-mantto-esp32" or
+                data.get("hardware") != "ESP32-S3-4848S040" or
+                data.get("partition_table") != "partitions_ota_16mb.csv" or
+                data.get("credential_mode") != "ota3c-nvs"):
+                continue
             full_sha = str(data.get("source_sha", "")).strip().lower()
             if not re.fullmatch(r"[0-9a-f]{40}", full_sha):
                 continue
