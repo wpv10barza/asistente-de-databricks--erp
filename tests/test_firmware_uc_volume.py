@@ -84,7 +84,7 @@ def test_uc_unknown_sha_has_no_latest_fallback(tmp_path):
 
 def test_uc_tampered_image_sha_fails_closed(tmp_path):
     published(tmp_path)
-    (tmp_path / "stable" / "2.5.1" / "firmware.bin").write_bytes(b"tampered")
+    (tmp_path / "stable" / "2.5.1" / "firmware.bin").write_bytes(b"XXXXX")
     store = UcVolumeFirmwareOtaStore(VOLUME, files_client=FakeFiles(tmp_path))
     with pytest.raises(FirmwareOtaError, match="SHA-256 real"):
         store.release_for_commit("2d6b9e0e")
