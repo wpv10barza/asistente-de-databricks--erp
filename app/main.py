@@ -329,13 +329,19 @@ def create_review_proposal(item: ReviewProposalRequest) -> dict:
             operations=[operation.model_dump() for operation in item.operations],
             external_command_id=item.external_command_id,
         )
+        audit_changes = [
+            {"cell": f"{op['columna_actualizar']}{item.row}",
+             "value": str(op["valor_actualizar"])[:180]}
+            for op in proposal["operations"]
+        ]
+        history_store.append(
+            "proposal_created", command_id=item.external_command_id,
+            proposal_id=proposal["id"], row=item.row, changes=audit_changes,
+        )
         if item.external_command_id:
             history_store.append(
                 "proposal_preview", command_id=item.external_command_id,
-                proposal_id=proposal["id"],
-                changes=[{"cell": f"{op['columna_actualizar']}{item.row}",
-                          "value": str(op["valor_actualizar"])[:180]}
-                         for op in proposal["operations"]],
+                proposal_id=proposal["id"], changes=audit_changes,
             )
         return proposal
     except ValueError as exc:
@@ -356,11 +362,18 @@ def create_single_proposal(item: SingleProposalRequest) -> dict:
         "razon": "Propuesta API",
     }
     try:
-        return review_store.propose(
+        proposal = review_store.propose(
             row=item.row,
             matched="",
             operations=[operation],
         )
+        history_store.append(
+            "proposal_created", proposal_id=proposal["id"],
+            command_id=None, row=item.row,
+            changes=[{"cell": f"{column}{item.row}",
+                      "value": str(item.value)[:180]}],
+        )
+        return proposal
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -373,7 +386,15 @@ def get_review_proposal(proposal_id: str) -> dict:
 @app.post("/api/review/proposals/{proposal_id}/approve")
 def approve_review_proposal(proposal_id: str) -> dict:
     try:
-        return review_store.approve(proposal_id)
+        proposal = review_store.approve(proposal_id)
+        history_store.append(
+            "proposal_approved", proposal_id=proposal_id,
+            command_id=proposal.get("external_command_id"), row=proposal["row"],
+            changes=[{"cell": f"{op['columna_actualizar']}{proposal['row']}",
+                      "value": str(op["valor_actualizar"])[:180]}
+                     for op in proposal["operations"]],
+        )
+        return proposal
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -383,6 +404,13 @@ def reject_review_proposal(proposal_id: str) -> dict:
     try:
         proposal = review_store.reject(proposal_id)
         command_id = proposal.get("external_command_id")
+        history_store.append(
+            "proposal_rejected", proposal_id=proposal_id,
+            command_id=command_id, row=proposal["row"],
+            changes=[{"cell": f"{op['columna_actualizar']}{proposal['row']}",
+                      "value": str(op["valor_actualizar"])[:180]}
+                     for op in proposal["operations"]],
+        )
         if command_id:
             updated = device_commands.update(command_id, "rejected", "Rechazado por revisión humana.")
             history_store.append(
@@ -401,10 +429,26 @@ def apply_review_proposal(proposal_id: str) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    attempt_changes = [
+        {"cell": f"{op['columna_actualizar']}{proposal['row']}",
+         "value": str(op["valor_actualizar"])[:180]}
+        for op in proposal["operations"]
+    ]
+    history_store.append(
+        "sheet_apply_attempt", proposal_id=proposal_id,
+        command_id=proposal.get("external_command_id"),
+        row=proposal["row"], changes=attempt_changes,
+    )
     verification = None
     try:
         verification = gateway.verify_template()
         if not verification["ok"]:
+            history_store.append(
+                "sheet_apply_blocked", proposal_id=proposal_id,
+                command_id=proposal.get("external_command_id"),
+                row=proposal["row"], changes=attempt_changes,
+                reason="Plantilla Google Sheets no coincide",
+            )
             raise HTTPException(status_code=409, detail=verification)
 
         changes = [
@@ -443,6 +487,14 @@ def apply_review_proposal(proposal_id: str) -> dict:
             "template_verification": verification,
         }
     except SheetsError as exc:
+        history_store.append(
+            "sheet_apply_blocked", proposal_id=proposal_id,
+            command_id=proposal.get("external_command_id"),
+            row=proposal["row"], changes=attempt_changes,
+            reason=("Escritura deshabilitada por configuracion"
+                    if not settings.allow_sheet_write else
+                    "Google Sheets rechazo o no confirmo la escritura"),
+        )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
