@@ -462,6 +462,23 @@ def latest_device_firmware(request: Request) -> dict:
     }
 
 
+@app.get("/api/device/v1/firmware/by-commit/{source_sha}")
+def firmware_by_commit(source_sha: str, request: Request) -> dict:
+    _device_authorization(request)
+    try:
+        release, full_commit = firmware_ota.by_commit(source_sha)
+    except FirmwareOtaError as exc:
+        # A commit is not a build. Not found is explicit; never serve latest.
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        **release.public(),
+        "source_sha": full_commit,
+        "channel": settings.ota_channel,
+        "transport": "https",
+        "verification": "sha256",
+    }
+
+
 @app.get("/api/device/v1/firmware/{version}.bin")
 def download_device_firmware(version: str, request: Request) -> FileResponse:
     _device_authorization(request)

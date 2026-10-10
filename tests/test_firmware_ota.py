@@ -103,3 +103,46 @@ def test_http_ota_routes_never_mask_missing_manifest_as_404(
     manifest = client.get("/api/device/v1/firmware/latest", headers=headers)
     assert manifest.status_code == 200
     assert manifest.json()["url"] == "/api/device/v1/firmware/1.0.1.bin"
+
+def test_by_commit_only_uses_published_release(tmp_path: Path) -> None:
+    sha = "a" * 40
+    make_release(tmp_path, "2.7.0", b"real_ota_bytes")
+    manifest = tmp_path / "stable" / "2.7.0" / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["source_sha"] = sha
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    store = FirmwareOtaStore(str(tmp_path))
+    release, resolved = store.by_commit("aaaaaaa")
+    assert resolved == sha and release.version == "2.7.0"
+    with pytest.raises(FirmwareOtaError, match="no tiene firmware"):
+        store.by_commit("bbbbbbb")
+    with pytest.raises(FirmwareOtaError, match="SHA hexadecimal"):
+        store.by_commit("../latest")
+
+
+def test_commit_route_is_authorized_and_does_not_fall_back_to_latest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+    from fastapi.testclient import TestClient
+    from app import main as backend
+
+    make_release(tmp_path, "2.7.0", b"example")
+    manifest = tmp_path / "stable" / "2.7.0" / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["source_sha"] = "a" * 40
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(backend, "settings",
+                        replace(backend.settings, esp32_api_token="ci-device-token"))
+    monkeypatch.setattr(backend, "firmware_ota", FirmwareOtaStore(str(tmp_path)))
+    client = TestClient(backend.app)
+    route = "/api/device/v1/firmware/by-commit/" + "a" * 40
+    assert client.get(route).status_code == 401
+    authorized = {"X-3C-Device-Token": "ci-device-token"}
+    found = client.get(route, headers=authorized)
+    assert found.status_code == 200
+    assert found.json()["source_sha"] == "a" * 40
+    assert found.json()["version"] == "2.7.0"
+    not_published = client.get(
+        "/api/device/v1/firmware/by-commit/" + "b" * 40, headers=authorized)
+    assert not_published.status_code == 404

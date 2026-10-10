@@ -121,3 +121,43 @@ class FirmwareOtaStore:
             size=size,
             path=binary_path,
         )
+
+    def by_commit(self, source_sha: str) -> tuple[FirmwareRelease, str]:
+        """Select only an already published, immutable, matching firmware build.
+
+        Never fetch, build or install an arbitrary GitHub commit on the device.
+        A 7..40-character SHA prefix is accepted only when it uniquely identifies
+        one published artifact. Never fall back to latest on a missing match.
+        """
+        candidate = source_sha.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{7,40}", candidate):
+            raise FirmwareOtaError("Commit debe ser SHA hexadecimal de 7 a 40 caracteres.")
+        directory = self._channel_dir()
+        if not directory.is_dir():
+            raise FirmwareOtaError("No hay firmware publicado en el canal OTA.")
+        matches: list[tuple[FirmwareRelease, str]] = []
+        for version_dir in directory.iterdir():
+            if not version_dir.is_dir() or not VERSION_RE.fullmatch(version_dir.name):
+                continue
+            manifest_path = version_dir / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            full_sha = str(data.get("source_sha", "")).strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{40}", full_sha):
+                continue
+            if not full_sha.startswith(candidate):
+                continue
+            release = self.release(version_dir.name)
+            declared_size = int(data.get("size", 0))
+            if declared_size != release.size or not SHA256_RE.fullmatch(release.sha256):
+                raise FirmwareOtaError("Metadatos de firmware publicado inconsistentes.")
+            matches.append((release, full_sha))
+        if not matches:
+            raise FirmwareOtaError("El commit no tiene firmware OTA publicado.")
+        if len(matches) > 1:
+            raise FirmwareOtaError("Commit ambiguo: use el SHA completo de 40 caracteres.")
+        return matches[0]
