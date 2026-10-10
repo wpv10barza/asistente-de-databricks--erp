@@ -56,7 +56,7 @@ class VoiceProviderError(RuntimeError):
 def _generate_gemini_content(*, client, model: str, contents):
     from google.genai import errors
     try:
-        # Gemini 3.8 uses default sampling rather than legacy temperature=0.
+        # Gemini 3.8 uses its supported default generation parameters.
         return client.models.generate_content(model=model, contents=contents)
     except errors.APIError as exc:
         raise VoiceProviderError(exc.code, exc.status) from exc
