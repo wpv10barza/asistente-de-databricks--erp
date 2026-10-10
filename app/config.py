@@ -19,8 +19,8 @@ class Settings:
     allow_sheet_write: bool = os.getenv("ALLOW_SHEET_WRITE", "false").lower() == "true"
 
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    voice_gemini_model: str = os.getenv("VOICE_GEMINI_MODEL", "gemini-2.5-flash")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    voice_gemini_model: str = os.getenv("VOICE_GEMINI_MODEL", "gemini-3.8-flash")
 
     esp32_api_token: str = os.getenv("ESP32_API_TOKEN", "")
     allow_insecure_device_api: bool = (
