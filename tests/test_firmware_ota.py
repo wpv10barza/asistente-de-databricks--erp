@@ -58,3 +58,47 @@ def test_unconfigured_volume_fails_closed() -> None:
     store = FirmwareOtaStore("")
     with pytest.raises(FirmwareOtaError):
         store.latest()
+
+
+def test_missing_manifest_is_ota_error_not_404(tmp_path: Path) -> None:
+    store = FirmwareOtaStore(str(tmp_path))
+    with pytest.raises(FirmwareOtaError, match="latest.json"):
+        store.latest()
+
+
+def test_http_ota_routes_never_mask_missing_manifest_as_404(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from fastapi.testclient import TestClient
+    from app import main as backend
+
+    monkeypatch.setattr(backend.settings, "esp32_api_token", "local-test-token")
+    monkeypatch.setattr(backend, "firmware_ota", FirmwareOtaStore(str(tmp_path)))
+    client = TestClient(backend.app)
+    headers = {"X-3C-Device-Token": "local-test-token"}
+
+    health = client.get("/api/device/v1/health")
+    assert health.status_code == 200
+    assert health.json()["firmware_latest_path"] == "/api/device/v1/firmware/latest"
+
+    status = client.get("/api/device/v1/firmware/status", headers=headers)
+    assert status.status_code == 200
+    assert status.json()["route_ok"] is True
+    assert status.json()["status"] == "release_not_ready"
+    assert status.json()["ready"] is False
+
+    latest = client.get("/api/device/v1/firmware/latest", headers=headers)
+    assert latest.status_code == 503
+    assert "latest.json" in latest.json()["detail"]
+
+    unauthorized = client.get("/api/device/v1/firmware/status")
+    assert unauthorized.status_code == 401
+
+    make_release(tmp_path, "1.0.1")
+    ready = client.get("/api/device/v1/firmware/status", headers=headers)
+    assert ready.status_code == 200
+    assert ready.json()["ready"] is True
+    assert ready.json()["version"] == "1.0.1"
+    manifest = client.get("/api/device/v1/firmware/latest", headers=headers)
+    assert manifest.status_code == 200
+    assert manifest.json()["url"] == "/api/device/v1/firmware/1.0.1.bin"

@@ -407,6 +407,46 @@ def device_health() -> dict:
     }
 
 
+@app.get("/api/device/v1/firmware/status")
+def device_firmware_status(request: Request) -> dict:
+    """Authenticated, read-only OTA readiness report for debugging 404 vs 503.
+
+    Does not expose the physical Volume path, credentials, or private URLs.
+    A missing release is reported as not_ready rather than HTTP 404.
+    """
+    _device_authorization(request)
+    if not firmware_ota.configured:
+        return {
+            "route_ok": True,
+            "ready": False,
+            "status": "volume_not_configured",
+            "channel": settings.ota_channel,
+            "manifest_path": "/api/device/v1/firmware/latest",
+            "detail": "OTA_VOLUME_PATH no está configurado en la aplicación.",
+        }
+    try:
+        release = firmware_ota.latest()
+    except FirmwareOtaError as exc:
+        return {
+            "route_ok": True,
+            "ready": False,
+            "status": "release_not_ready",
+            "channel": settings.ota_channel,
+            "manifest_path": "/api/device/v1/firmware/latest",
+            "detail": str(exc),
+        }
+    return {
+        "route_ok": True,
+        "ready": True,
+        "status": "ready",
+        "channel": settings.ota_channel,
+        "manifest_path": "/api/device/v1/firmware/latest",
+        "version": release.version,
+        "size": release.size,
+        "sha256": release.sha256,
+    }
+
+
 @app.get("/api/device/v1/firmware/latest")
 def latest_device_firmware(request: Request) -> dict:
     _device_authorization(request)
