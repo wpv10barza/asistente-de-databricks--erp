@@ -283,6 +283,12 @@ class VoiceDraftStore:
                 "status": "queued_for_editor",
                 "_created": time.time(),
             }
+            # Latest dictated instruction wins over stale *undelivered* drafts
+            # for this same device. Do not change delivered/editor-reviewed text.
+            for previous in self._drafts:
+                if (previous["device_id"] == device_id and
+                    previous["status"] == "queued_for_editor"):
+                    previous["status"] = "superseded"
             self._drafts.append(draft)
             self._prune()
             self._save()  # Do not return HTTP 202 until stored, if mirror is enabled.

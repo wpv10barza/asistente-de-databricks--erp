@@ -300,3 +300,20 @@ def test_voice_button_capture_mirror_survives_backend_restart(tmp_path):
     assert VoiceDraftStore(path=file).claim_capture(DEVICE) is None
     assert VoiceDraftStore(path=file).finish_capture(DEVICE, capture["id"], False)["status"] == "failed"
     assert VoiceDraftStore(path=file).sync(DEVICE)["capture_status"] == "failed"
+
+
+
+def test_new_dictation_replaces_only_old_undelivered_drafts():
+    store = VoiceDraftStore()
+    old, _ = store.queue(DEVICE, "Inspeccion mensual", "old-transcript")
+    other, _ = store.queue("another-panel", "Tarea independiente", "other")
+    newer, _ = store.queue(DEVICE, "Inspeccionar puesta a tierra cada dos meses", "new-transcript")
+    assert store.get(DEVICE, old["id"])["status"] == "superseded"
+    assert store.next(DEVICE)["id"] == newer["id"]
+    assert store.next("another-panel")["id"] == other["id"]
+    assert store.ack(DEVICE, newer["id"])["status"] == "delivered_to_editor"
+    latest, _ = store.queue(DEVICE, "Inspección semestral", "even-newer")
+    assert store.get(DEVICE, newer["id"])["status"] == "delivered_to_editor"
+    assert store.next(DEVICE)["id"] == latest["id"]
+    repeated, duplicate = store.queue(DEVICE, "Inspeccion mensual", "old-transcript")
+    assert duplicate is True and repeated["id"] == old["id"]
