@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from .column_map import SHEET_HEADERS_A_AF, WRITE_COLUMNS
@@ -424,27 +426,45 @@ def firmware_by_git_commit(commit_sha: str, request: Request) -> dict:
 
 
 @app.get("/api/device/v1/firmware/{version}.bin")
-def download_device_firmware(version: str, request: Request) -> FileResponse:
+def download_device_firmware(version: str, request: Request) -> Response:
+    """Return one fully verified, fixed-length binary body.
+
+    ESP32's HTTPClient.getStreamPtr reads the unframed TCP/TLS payload.
+    A fixed Content-Length (and no chunked transfer framing) is needed for
+    its firmware loader. FileResponse's multi-chunk ASGI streaming can
+    interact poorly with an intermediate proxy, so buffer this bounded OTA
+    image before beginning the HTTP response. The firmware is restricted to
+    a 4 MiB application partition.
+    """
     _device_authorization(request)
     try:
         release = firmware_ota.release(version)
+        if release.size > 0x400000:
+            raise FirmwareOtaError("Firmware OTA excede la partición de 4 MiB.")
+        payload = release.path.read_bytes()
+        if len(payload) != release.size:
+            raise FirmwareOtaError("Tamaño del binario cambió durante la lectura.")
+        if not hmac.compare_digest(hashlib.sha256(payload).hexdigest(), release.sha256):
+            raise FirmwareOtaError("SHA-256 de la respuesta OTA no coincide.")
     except FirmwareOtaError as exc:
         message = str(exc)
         status = (404 if "no encontrado" in message.lower()
                   else 400 if "versión ota inválida" in message.lower()
                   else 503)
         raise HTTPException(status_code=status, detail=message) from exc
-    return FileResponse(
-        path=release.path,
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="No se pudo leer firmware OTA.") from exc
+
+    return Response(
+        content=payload,
         media_type="application/octet-stream",
-        filename=f"esp32-s3-4848s040-{release.version}.bin",
         headers={
+            "Content-Length": str(len(payload)),
             "X-Firmware-Version": release.version,
             "X-Firmware-SHA256": release.sha256,
-            "Cache-Control": "private, max-age=300",
+            "Cache-Control": "private, no-store",
         },
     )
-
 
 @app.post("/api/device/v1/commands")
 def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict:
