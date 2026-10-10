@@ -513,6 +513,24 @@ def voice_inbox(request: Request, device_id: str) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.get("/api/device/v1/voice/drafts/{draft_id}")
+def voice_draft_status(draft_id: str, device_id: str, request: Request) -> dict:
+    _device_authorization(request)
+    try:
+        draft = voice_drafts.get(device_id, draft_id)
+    except VoiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not draft:
+        raise HTTPException(status_code=404, detail="Borrador no encontrado/caducado")
+    return {
+        "draft_id": draft["id"],
+        "status": draft["status"],
+        "device_id": draft["device_id"],
+        "requires_local_review": True,
+        "sheets_modified": False,
+    }
+
+
 @app.post("/api/device/v1/voice/drafts/{draft_id}/ack")
 def acknowledge_voice_draft(draft_id: str, item: VoiceDraftAck, request: Request) -> dict:
     _device_authorization(request)
