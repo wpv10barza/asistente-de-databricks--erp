@@ -92,6 +92,8 @@ class DeviceCommandStore:
                 "created_at": timestamp,
                 "updated_at": timestamp,
                 "result": None,
+                "changes_summary": "",
+                "change_count": 0,
                 "_created_epoch": epoch,
             }
             self._commands.append(command)
@@ -127,7 +129,37 @@ class DeviceCommandStore:
             selected = pending[position + 1] if 0 <= position < len(pending) - 1 else pending[-1]
             return self._public(selected)
 
-    def update(self, command_id: str, status: str, result: str = "") -> dict | None:
+    def recent(self, device_id: str, offset: int = 0) -> dict:
+        """Return a single recent record without exposing other devices.
+
+        Ephemeral: this in-memory store expires after the configured TTL.
+        It is a recent status viewer, not a permanent audit ledger.
+        """
+        with self._lock:
+            self._prune()
+            entries = [c for c in reversed(self._commands)
+                       if c["device_id"] == device_id]
+            total = len(entries)
+            selected = self._public(entries[offset]) if offset < total else None
+            if selected is None:
+                return {"total": total, "offset": offset, "command_id": "",
+                        "text": "", "status": "empty", "result": "",
+                        "changes_summary": "", "change_count": 0,
+                        "updated_at": ""}
+            return {
+                "total": total,
+                "offset": offset,
+                "command_id": selected["id"],
+                "text": selected["text"],
+                "status": selected["status"],
+                "result": selected["result"] or "",
+                "changes_summary": selected["changes_summary"],
+                "change_count": selected["change_count"],
+                "updated_at": selected["updated_at"],
+            }
+
+    def update(self, command_id: str, status: str, result: str = "",
+               changes: list[tuple[str, object]] | None = None) -> dict | None:
         if status not in {"applied", "rejected"}:
             raise ValueError("status debe ser applied o rejected.")
         with self._lock:
@@ -141,6 +173,16 @@ class DeviceCommandStore:
             if command["status"] == "pending_confirmation":
                 command["status"] = status
                 command["result"] = clean_single_line(result, 300) or None
+                if status == "applied" and changes:
+                    command["change_count"] = len(changes)
+                    parts = [
+                        clean_single_line(f"{cell}: {value}", 90)
+                        for cell, value in changes[:3]
+                    ]
+                    suffix = " ..." if len(changes) > 3 else ""
+                    command["changes_summary"] = clean_single_line(
+                        "; ".join(parts) + suffix, 180
+                    )
                 command["updated_at"] = _utc_now_iso()
             return self._public(command)
 

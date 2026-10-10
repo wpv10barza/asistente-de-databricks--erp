@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from .column_map import SHEET_HEADERS_A_AF, WRITE_COLUMNS
 from .config import Settings
 from .device_store import DeviceCommandStore, normalize_device_command, verify_device_token
 from .firmware_ota import FirmwareOtaError, FirmwareOtaStore
+from .firmware_uc_volume import UcVolumeFirmwareOtaStore
 from .google_sheets import SheetsError, SheetsGateway
 from .indexer import SemanticIndex
 from .interpreter import interpret_command
@@ -29,7 +32,11 @@ semantic_index = SemanticIndex.load()
 sheet_index = LiveSheetIndex()
 device_commands = DeviceCommandStore()
 review_store = ReviewStore()
-firmware_ota = FirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
+firmware_ota = (
+    UcVolumeFirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
+    if settings.ota_volume_path.strip().startswith("/Volumes/")
+    else FirmwareOtaStore(settings.ota_volume_path, settings.ota_channel)
+)
 
 
 class SearchRequest(BaseModel):
@@ -344,6 +351,7 @@ def apply_review_proposal(proposal_id: str) -> dict:
                 command_id,
                 "applied",
                 f"Propuesta {proposal_id} aplicada.",
+                changes=changes,
             )
 
         return {
@@ -396,26 +404,68 @@ def latest_device_firmware(request: Request) -> dict:
     }
 
 
+@app.get("/api/device/v1/firmware/commits/{commit_sha}")
+def firmware_by_git_commit(commit_sha: str, request: Request) -> dict:
+    _device_authorization(request)
+    try:
+        release = firmware_ota.release_for_commit(commit_sha)
+    except FirmwareOtaError as exc:
+        message = str(exc)
+        lowered = message.lower()
+        status = (400 if "sha inválido" in lowered
+                  else 409 if "ambiguo" in lowered
+                  else 404 if "no existe firmware" in lowered
+                  else 503)
+        raise HTTPException(status_code=status, detail=message) from exc
+    return {
+        **release.public(),
+        "channel": settings.ota_channel,
+        "transport": "https",
+        "verification": "sha256",
+        "selection": "git_commit",
+    }
+
+
 @app.get("/api/device/v1/firmware/{version}.bin")
-def download_device_firmware(version: str, request: Request) -> FileResponse:
+def download_device_firmware(version: str, request: Request) -> Response:
+    """Return one fully verified, fixed-length binary body.
+
+    ESP32's HTTPClient.getStreamPtr reads the unframed TCP/TLS payload.
+    A fixed Content-Length (and no chunked transfer framing) is needed for
+    its firmware loader. FileResponse's multi-chunk ASGI streaming can
+    interact poorly with an intermediate proxy, so buffer this bounded OTA
+    image before beginning the HTTP response. The firmware is restricted to
+    a 4 MiB application partition.
+    """
     _device_authorization(request)
     try:
         release = firmware_ota.release(version)
+        if release.size > 0x400000:
+            raise FirmwareOtaError("Firmware OTA excede la partición de 4 MiB.")
+        payload = release.path.read_bytes()
+        if len(payload) != release.size:
+            raise FirmwareOtaError("Tamaño del binario cambió durante la lectura.")
+        if not hmac.compare_digest(hashlib.sha256(payload).hexdigest(), release.sha256):
+            raise FirmwareOtaError("SHA-256 de la respuesta OTA no coincide.")
     except FirmwareOtaError as exc:
         message = str(exc)
-        status = 404 if "no encontrado" in message.lower() else 400
+        status = (404 if "no encontrado" in message.lower()
+                  else 400 if "versión ota inválida" in message.lower()
+                  else 503)
         raise HTTPException(status_code=status, detail=message) from exc
-    return FileResponse(
-        path=release.path,
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="No se pudo leer firmware OTA.") from exc
+
+    return Response(
+        content=payload,
         media_type="application/octet-stream",
-        filename=f"esp32-s3-4848s040-{release.version}.bin",
         headers={
+            "Content-Length": str(len(payload)),
             "X-Firmware-Version": release.version,
             "X-Firmware-SHA256": release.sha256,
-            "Cache-Control": "private, max-age=300",
+            "Cache-Control": "private, no-store",
         },
     )
-
 
 @app.post("/api/device/v1/commands")
 def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict:
@@ -440,6 +490,20 @@ def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict
 @app.get("/api/device/v1/commands/pending")
 def pending_device_command(after: str | None = None) -> dict:
     return {"command": device_commands.latest_pending(after)}
+
+
+@app.get("/api/device/v1/commands/history")
+def recent_device_command(
+    request: Request, device_id: str, offset: int = 0
+) -> dict:
+    _device_authorization(request)
+    if not device_id or len(device_id) > 64 or not all(
+        char.isalnum() or char in "._:-" for char in device_id
+    ):
+        raise HTTPException(status_code=400, detail="device_id inválido.")
+    if not 0 <= offset <= 49:
+        raise HTTPException(status_code=400, detail="offset fuera de rango.")
+    return device_commands.recent(device_id, offset)
 
 
 @app.get("/api/device/v1/commands/{command_id}")
