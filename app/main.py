@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 import logging
+from time import perf_counter
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -758,15 +759,19 @@ def complete_windows_voice_capture(
 
 
 @app.get("/api/device/v1/voice/inbox/panel", response_class=PlainTextResponse)
-def voice_panel_inbox(request: Request, device_id: str) -> str:
+def voice_panel_inbox(request: Request, device_id: str, response: Response) -> str:
+    """Preserve the ESP32's 200 + empty-body wire contract on an empty inbox."""
     _device_authorization(request)
+    started = perf_counter()
     try:
-        voice_drafts.observe_poll(device_id)
-        draft = voice_drafts.next(device_id)
+        draft = voice_drafts.poll_next(device_id)
     except VoiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except VoiceStoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # Avoid caching an empty response across subsequent dictations.
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Server-Timing"] = f"voice_store;dur={(perf_counter() - started) * 1000:.3f}"
     if not draft:
         return ""
     # Sanitize controls at enqueue so split-on-tab is unambiguous to the MCU.

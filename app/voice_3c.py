@@ -362,6 +362,28 @@ class VoiceDraftStore:
                      if c.get("device_id") == device_id), "none"),
             }
 
+    def poll_next(self, device_id: str) -> dict | None:
+        """ESP32 panel hot path: heartbeat + inbox with one snapshot read.
+
+        Keep 200 + empty string on no draft at the API layer. On a mounted
+        single-instance volume, avoid double JSON reads per poll. Persist
+        the heartbeat at most once per 30 seconds, as before.
+        """
+        device_id = safe_device_id(device_id)
+        with self._lock:
+            self._refresh()
+            self._prune()
+            now = time.time()
+            previous = self._last_polls.get(device_id, 0)
+            self._last_polls[device_id] = now
+            if self.path and now - previous >= 30:
+                self._save()
+            for draft in self._drafts:
+                if (draft["device_id"] == device_id and
+                    draft["status"] == "queued_for_editor"):
+                    return self._public(draft)
+            return None
+
     def next(self, device_id: str) -> dict | None:
         device_id = safe_device_id(device_id)
         with self._lock:

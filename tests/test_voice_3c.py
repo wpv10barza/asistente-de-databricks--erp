@@ -365,3 +365,47 @@ def test_pc_agent_auto_route_ambiguous_panels_fails_closed(app_client):
                                params={"device_id": target})
         assert claim.status_code == 200
         assert claim.json()["capture"]["device_id"] == target
+
+
+def test_panel_inbox_wire_contract_and_one_snapshot_refresh(app_client, monkeypatch):
+    """HTTP 200/0 is expected; a poll reads the durable snapshot once."""
+    store = backend.voice_drafts
+    called = []
+    original = store._refresh
+
+    def counted_refresh():
+        called.append(1)
+        return original()
+
+    monkeypatch.setattr(store, "_refresh", counted_refresh)
+    endpoint = "/api/device/v1/voice/inbox/panel"
+    empty = app_client.get(endpoint, headers=AUTH, params={"device_id": DEVICE})
+    assert empty.status_code == 200
+    assert empty.content == b""
+    assert empty.headers["cache-control"] == "no-store"
+    assert empty.headers["server-timing"].startswith("voice_store;dur=")
+    assert len(called) == 1
+    assert store.sync(DEVICE)["panel_seen_recently"] is True
+
+    sent = app_client.post("/api/device/v1/voice/drafts", headers=AUTH, json={
+        "device_id": DEVICE, "text": "Revision anual",
+        "request_id": "smoke-poll-1",
+    })
+    assert sent.status_code == 202
+    called.clear()
+    filled = app_client.get(endpoint, headers=AUTH, params={"device_id": DEVICE})
+    assert filled.status_code == 200
+    assert filled.text == sent.json()["draft_id"] + "\tRevision anual\n"
+    assert len(called) == 1
+    assert app_client.get(endpoint, params={"device_id": DEVICE}).status_code == 401
+
+
+def test_panel_poll_durable_store_survives_restart(tmp_path):
+    path = str(tmp_path / "mirror" / "panel.json")
+    initial = VoiceDraftStore(path=path)
+    created, _ = initial.queue(DEVICE, "Inspeccion en campo", "poll-restart")
+    restored = VoiceDraftStore(path=path)
+    assert restored.poll_next(DEVICE)["id"] == created["id"]
+    assert VoiceDraftStore(path=path).sync(DEVICE)["panel_seen_recently"]
+    assert restored.ack(DEVICE, created["id"])["status"] == "delivered_to_editor"
+    assert VoiceDraftStore(path=path).poll_next(DEVICE) is None
