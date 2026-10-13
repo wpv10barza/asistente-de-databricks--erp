@@ -12,6 +12,14 @@ from threading import RLock
 DEVICE_COMMAND_TTL_SECONDS = 15 * 60
 DEVICE_COMMAND_LIMIT = 50
 
+_ALLOWED_TRANSITIONS = {
+    'pending_confirmation': {'pending_review', 'approved_not_applied', 'rejected'},
+    'pending_review': {'approved_not_applied', 'rejected'},
+    'approved_not_applied': {'applied', 'rejected'},
+    'applied': set(),
+    'rejected': set(),
+}
+
 
 def _utc_now_iso(now: float | None = None) -> str:
     timestamp = time.time() if now is None else now
@@ -89,6 +97,7 @@ class DeviceCommandStore:
                 "device_id": input_data["device_id"],
                 "text": input_data["text"],
                 "status": "pending_confirmation",
+                "proposal_id": None,
                 "created_at": timestamp,
                 "updated_at": timestamp,
                 "result": None,
@@ -114,7 +123,7 @@ class DeviceCommandStore:
             pending = [
                 command
                 for command in self._commands
-                if command["status"] == "pending_confirmation"
+                if command["status"] in {"pending_confirmation", "pending_review"}
             ]
             if not pending:
                 return None
@@ -127,9 +136,12 @@ class DeviceCommandStore:
             selected = pending[position + 1] if 0 <= position < len(pending) - 1 else pending[-1]
             return self._public(selected)
 
-    def update(self, command_id: str, status: str, result: str = "") -> dict | None:
-        if status not in {"applied", "rejected"}:
-            raise ValueError("status debe ser applied o rejected.")
+    def update(
+        self, command_id: str, status: str, result: str = "",
+        *, proposal_id: str | None = None,
+    ) -> dict | None:
+        if status not in _ALLOWED_TRANSITIONS:
+            raise ValueError(f"Estado de comando no permitido: {status}.")
         with self._lock:
             self._prune()
             command = next(
@@ -138,10 +150,21 @@ class DeviceCommandStore:
             )
             if not command:
                 return None
-            if command["status"] == "pending_confirmation":
-                command["status"] = status
-                command["result"] = clean_single_line(result, 300) or None
-                command["updated_at"] = _utc_now_iso()
+            current = command["status"]
+            if status == current:
+                return self._public(command)
+            if status not in _ALLOWED_TRANSITIONS[current]:
+                raise ValueError(f"Transicion de comando no permitida: {current} -> {status}.")
+            if proposal_id:
+                linked = command.get("proposal_id")
+                if linked and linked != proposal_id:
+                    raise ValueError("El comando ya tiene otra propuesta vinculada.")
+                command["proposal_id"] = proposal_id
+            if status in {"approved_not_applied", "applied"} and not command.get("proposal_id"):
+                raise ValueError("No se puede aprobar o aplicar sin una propuesta vinculada.")
+            command["status"] = status
+            command["result"] = clean_single_line(result, 300) or None
+            command["updated_at"] = _utc_now_iso()
             return self._public(command)
 
     @staticmethod

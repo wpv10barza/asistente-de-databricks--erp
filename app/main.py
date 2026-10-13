@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
@@ -25,6 +26,7 @@ app = FastAPI(
     description="Edición Databricks-only: RAG, Device API, revisión humana y Google Sheets.",
 )
 
+logger = logging.getLogger("app.command_flow")
 settings = Settings()
 gateway = SheetsGateway(settings)
 semantic_index = SemanticIndex.load()
@@ -331,6 +333,12 @@ def extract(item: ExtractRequest) -> dict:
 
 @app.post("/api/review/proposals", status_code=201)
 def create_review_proposal(item: ReviewProposalRequest) -> dict:
+    if item.external_command_id:
+        linked = device_commands.get(item.external_command_id)
+        if not linked:
+            raise HTTPException(status_code=404, detail="Comando vinculado no encontrado o vencido.")
+        if linked.get("proposal_id"):
+            raise HTTPException(status_code=409, detail="Comando ya vinculado a otra propuesta.")
     try:
         proposal = review_store.propose(
             row=item.row,
@@ -352,6 +360,13 @@ def create_review_proposal(item: ReviewProposalRequest) -> dict:
                 "proposal_preview", command_id=item.external_command_id,
                 proposal_id=proposal["id"], changes=audit_changes,
             )
+            device_commands.update(
+                item.external_command_id, "pending_review",
+                "Propuesta creada; requiere revision humana.",
+                proposal_id=proposal["id"],
+            )
+            logger.info("3c_flow command_id=%s proposal_id=%s status=pending_review",
+                        item.external_command_id, proposal["id"])
         return proposal
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -403,6 +418,14 @@ def approve_review_proposal(proposal_id: str) -> dict:
                       "value": str(op["valor_actualizar"])[:180]}
                      for op in proposal["operations"]],
         )
+        if proposal.get("external_command_id"):
+            device_commands.update(
+                proposal["external_command_id"], "approved_not_applied",
+                "Aprobado por humano; Google Sheets aun no modificado.",
+                proposal_id=proposal_id,
+            )
+            logger.info("3c_flow command_id=%s proposal_id=%s status=approved_not_applied",
+                        proposal["external_command_id"], proposal_id)
         return proposal
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -421,7 +444,12 @@ def reject_review_proposal(proposal_id: str) -> dict:
                      for op in proposal["operations"]],
         )
         if command_id:
-            updated = device_commands.update(command_id, "rejected", "Rechazado por revisión humana.")
+            updated = device_commands.update(
+                command_id, "rejected", "Rechazado por revision humana.",
+                proposal_id=proposal_id,
+            )
+            logger.info("3c_flow command_id=%s proposal_id=%s status=rejected",
+                        command_id, proposal_id)
             history_store.append(
                 "command_rejected", command_id=command_id,
                 device_id=updated["device_id"] if updated else "",
@@ -483,7 +511,10 @@ def apply_review_proposal(proposal_id: str) -> dict:
                 command_id,
                 "applied",
                 f"Propuesta {proposal_id} aplicada.",
+                proposal_id=proposal_id,
             )
+            logger.info("3c_flow command_id=%s proposal_id=%s status=applied",
+                        command_id, proposal_id)
             history_store.append(
                 "command_applied", command_id=command_id,
                 device_id=updated["device_id"] if updated else "",
@@ -910,6 +941,7 @@ def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict
                 "command_sent", command_id=command["id"],
                 device_id=command["device_id"], text=command["text"],
             )
+            logger.info("3c_flow command_id=%s status=pending_confirmation", command["id"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

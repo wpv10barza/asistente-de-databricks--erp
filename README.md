@@ -102,6 +102,17 @@ Primero despliegue sin secretos. Deben funcionar `/`, `/docs`, `/api/health` y e
 
 Después agregue secretos de Databricks para Gemini, Google Service Account y Device API. Mantenga escritura desactivada hasta validar lectura, cabeceras y guardas.
 
+### Estados reales del comando ESP32 (sin escritura automatica)
+
+- `POST /api/device/v1/commands` responde enseguida con `command_id` y `pending_confirmation`: recibido, no ejecutado.
+- `POST /api/review/proposals` con `external_command_id` vincula una propuesta validada y pasa a `pending_review`.
+- `POST /api/review/proposals/{id}/approve` pasa a `approved_not_applied`: **no escribe en Google Sheets**.
+- Rechazar pasa a `rejected`. Solo `apply`, tras una respuesta satisfactoria de Google Sheets, pasa a `applied`.
+- `GET /api/device/v1/commands/{command_id}` devuelve `command.status`, `command.proposal_id` y `command.updated_at`. Los logs `3c_flow` registran transiciones sin texto de la orden ni secretos.
+- La interpretacion y creacion de propuestas **no es automatica**. La revision web debe crear la propuesta con el `external_command_id` correspondiente. El polling no procesa comandos.
+- El almacen de comandos sigue en memoria con TTL de 15 minutos. Reinicios o expiracion pueden devolver 404; para produccion se necesita persistencia duradera.
+- Mantener `ALLOW_SHEET_WRITE=false` durante las pruebas. Aprobar no equivale a aplicar.
+
 ## Historial de ordenes 3C y Google Sheets (ESP32)
 
 Nuevo endpoint autenticado con `X-3C-Device-Token`:
