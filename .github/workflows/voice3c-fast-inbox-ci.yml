@@ -1,0 +1,48 @@
+name: Voice 3C Fast Inbox - contract and latency CI
+on:
+  push:
+    branches:
+      - feature/voice3c-fast-inbox-2026-10
+  pull_request:
+    paths:
+      - app/main.py
+      - app/voice_3c.py
+      - tests/test_voice_3c.py
+      - .github/workflows/voice3c-fast-inbox-ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  voice-endpoints:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      ALLOW_SHEET_WRITE: "false"
+      ALLOW_INSECURE_DEVICE_API: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Python compile and repository security
+        run: |
+          mkdir -p artifacts
+          python -m compileall -q app app.py scripts tests
+          python scripts/check_repo_security.py | tee artifacts/security.log
+      - name: Run real FastAPI endpoint contracts (mock providers)
+        run: |
+          python -m pytest -q tests/test_voice_3c.py tests/test_device_api.py 2>&1 | tee artifacts/voice_endpoint_tests.log
+      - name: Timed TestClient smoke - empty/queued/ACK (no live secrets)
+        run: |
+          python -m pytest -q tests/test_voice_3c.py -k "panel_inbox_wire_contract or panel_poll_durable" --durations=5 2>&1 | tee artifacts/panel_timing.log
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice3c-endpoint-logs-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14

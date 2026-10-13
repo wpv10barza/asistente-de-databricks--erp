@@ -365,3 +365,114 @@ def test_pc_agent_auto_route_ambiguous_panels_fails_closed(app_client):
                                params={"device_id": target})
         assert claim.status_code == 200
         assert claim.json()["capture"]["device_id"] == target
+
+
+def test_panel_inbox_wire_contract_and_one_snapshot_refresh(app_client, monkeypatch):
+    """HTTP 200/0 is expected; a poll reads the durable snapshot once."""
+    store = backend.voice_drafts
+    called = []
+    original = store._refresh
+
+    def counted_refresh():
+        called.append(1)
+        return original()
+
+    monkeypatch.setattr(store, "_refresh", counted_refresh)
+    endpoint = "/api/device/v1/voice/inbox/panel"
+    empty = app_client.get(endpoint, headers=AUTH, params={"device_id": DEVICE})
+    assert empty.status_code == 200
+    assert empty.content == b""
+    assert empty.headers["cache-control"] == "no-store"
+    assert empty.headers["server-timing"].startswith("voice_store;dur=")
+    assert len(called) == 1
+    assert store.sync(DEVICE)["panel_seen_recently"] is True
+
+    sent = app_client.post("/api/device/v1/voice/drafts", headers=AUTH, json={
+        "device_id": DEVICE, "text": "Revision anual",
+        "request_id": "smoke-poll-1",
+    })
+    assert sent.status_code == 202
+    called.clear()
+    filled = app_client.get(endpoint, headers=AUTH, params={"device_id": DEVICE})
+    assert filled.status_code == 200
+    assert filled.text == sent.json()["draft_id"] + "\tRevision anual\n"
+    assert len(called) == 1
+    assert app_client.get(endpoint, params={"device_id": DEVICE}).status_code == 401
+
+
+def test_panel_poll_durable_store_survives_restart(tmp_path):
+    path = str(tmp_path / "mirror" / "panel.json")
+    initial = VoiceDraftStore(path=path)
+    created, _ = initial.queue(DEVICE, "Inspeccion en campo", "poll-restart")
+    restored = VoiceDraftStore(path=path)
+    assert restored.poll_next(DEVICE)["id"] == created["id"]
+    assert VoiceDraftStore(path=path).sync(DEVICE)["panel_seen_recently"]
+    assert restored.ack(DEVICE, created["id"])["status"] == "delivered_to_editor"
+    assert VoiceDraftStore(path=path).poll_next(DEVICE) is None
+
+
+def test_full_device_voice_flow_simulated_without_external_services(app_client, monkeypatch):
+    """Device -> PC agent -> transcription -> inbox -> ACK -> command -> history."""
+    transcript = "Actualizar lubricacion a cada treinta dias"
+    monkeypatch.setattr(backend, "transcribe_with_gemini", lambda *args: transcript)
+    start = app_client.post(
+        "/api/device/v1/voice/capture/request", headers=AUTH,
+        json={"device_id": DEVICE},
+    )
+    assert start.status_code == 202
+    capture_id = start.json()["capture_id"]
+    claimed = app_client.get(
+        "/api/device/v1/voice/capture/next", headers=AUTH,
+        params={"device_id": DEVICE},
+    )
+    assert claimed.status_code == 200
+    assert claimed.json()["capture"]["id"] == capture_id
+
+    audio = base64.b64encode(b"RIFF" + b"0" * 512).decode()
+    stt = app_client.post("/api/device/v1/voice/transcribe", headers=AUTH, json={
+        "audio_base64": audio, "mime_type": "audio/wav",
+    })
+    assert stt.status_code == 200
+    assert stt.json()["transcript"] == transcript
+    draft = app_client.post("/api/device/v1/voice/drafts", headers=AUTH, json={
+        "device_id": DEVICE, "request_id": "full-flow-test-1", "text": transcript,
+    })
+    assert draft.status_code == 202
+    delivered = app_client.get(
+        "/api/device/v1/voice/inbox/panel", headers=AUTH,
+        params={"device_id": DEVICE},
+    )
+    assert delivered.status_code == 200
+    assert delivered.text == draft.json()["draft_id"] + "\t" + transcript + "\n"
+    ack = app_client.post(
+        f"/api/device/v1/voice/drafts/{draft.json()['draft_id']}/ack",
+        headers=AUTH, json={"device_id": DEVICE},
+    )
+    assert ack.status_code == 200
+    assert ack.json()["status"] == "delivered_to_editor"
+    assert app_client.get(
+        "/api/device/v1/voice/inbox/panel", headers=AUTH,
+        params={"device_id": DEVICE},
+    ).content == b""
+
+    completed = app_client.post(
+        f"/api/device/v1/voice/capture/{capture_id}/complete",
+        headers=AUTH, json={"device_id": DEVICE, "success": True},
+    )
+    assert completed.status_code == 200
+    command = app_client.post("/api/device/v1/commands", headers=AUTH, json={
+        "device_id": DEVICE, "request_id": "full-flow-command-1", "text": transcript,
+    })
+    assert command.status_code == 200  # Compatibility: existing cloud contract
+    assert command.json()["status"] == "pending_confirmation"
+    assert command.json()["requires_human_confirmation"] is True
+    response = app_client.get(command.json()["status_path"], headers=AUTH)
+    assert response.status_code == 200
+    assert response.json()["command"]["status"] == "pending_confirmation"
+    history = app_client.get(
+        "/api/device/v1/history/panel", headers=AUTH,
+        params={"device_id": DEVICE, "limit": 8},
+    )
+    assert history.status_code == 200
+    assert command.json()["command_id"] != ""
+    assert ack.json()["sheets_modified"] is False
