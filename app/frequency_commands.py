@@ -22,7 +22,7 @@ _UNITS = {
 _COMMAND = re.compile(
     r"^(?:cambia|cambiar|modifica|modificar|actualiza|actualizar)\s+"
     r"(?:(?:la\s+)?(?:frecuencia|periodicidad)\s+(?:de\s+)?(?:la\s+)?)?"
-    r"(?:tarea\s+)?(?:id\s*)?(?P<task>\d{3,12})\s+"
+    r"(?:(?:la\s+)?tarea\s+)?(?:id\s*)?(?P<task>\d{3,12})\s+"
     r"(?:a|cada)\s+(?P<count>\d+|[a-z]+)\s+"
     r"(?P<unit>mes(?:es)?|ano(?:s)?|dia(?:s)?|semana(?:s)?|hora(?:s)?)\.?$"
 )
