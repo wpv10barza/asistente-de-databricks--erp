@@ -560,7 +560,7 @@ def apply_review_proposal(proposal_id: str) -> dict:
             frequency = after_row[11] if len(after_row) > 11 else "?"
             time_unit = after_row[12] if len(after_row) > 12 else "?"
             panel_result = (
-                f"OK Tarea {task_id}: L{row_number}={frequency} "
+                f"T{task_id} L{row_number}={frequency} "
                 f"M{row_number}={time_unit} VERIFICADO"
             )
         else:
