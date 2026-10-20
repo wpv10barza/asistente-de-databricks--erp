@@ -17,6 +17,7 @@ class Settings:
     google_access_token: str = os.getenv("GOOGLE_ACCESS_TOKEN", "")
     google_service_account_json: str = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     allow_sheet_write: bool = os.getenv("ALLOW_SHEET_WRITE", "false").lower() == "true"
+    review_approval_token: str = os.getenv("REVIEW_APPROVAL_TOKEN", "")
 
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
