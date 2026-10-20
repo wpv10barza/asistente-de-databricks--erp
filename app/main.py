@@ -425,7 +425,7 @@ def create_single_proposal(item: SingleProposalRequest) -> dict:
 @app.get("/api/review/queue")
 def review_queue(request: Request) -> dict:
     _review_authorization(request)
-    command = device_commands.latest_pending()
+    command = device_commands.latest_for_review()
     if not command:
         return {"command": None, "proposal": None, "changes": []}
     pid = command.get("proposal_id")
