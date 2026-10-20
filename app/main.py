@@ -548,7 +548,7 @@ def apply_review_proposal(proposal_id: str) -> dict:
             changes=[{
                 "cell": item["cell"], "value": str(item["after"])[:180],
                 "before": str(item["before"])[:180], "changed": item["changed"],
-                "verified": True,
+                "field": item["field"], "verified": True,
             } for item in verified_changes],
         )
 
