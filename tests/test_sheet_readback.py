@@ -14,7 +14,8 @@ from app.review_store import ReviewStore
 
 def _setup(monkeypatch, *, writes_reach_sheet: bool):
     monkeypatch.setattr(
-        backend, "settings", replace(backend.settings, allow_sheet_write=True)
+        backend, "settings", replace(backend.settings, allow_sheet_write=True,
+                                      review_approval_token="test-review-only")
     )
     monkeypatch.setattr(backend, "device_commands", DeviceCommandStore())
     monkeypatch.setattr(backend, "review_store", ReviewStore())
@@ -62,7 +63,7 @@ def _make_proposal(client, command):
     })
     assert response.status_code == 201
     proposal_id = response.json()["id"]
-    assert client.post(f"/api/review/proposals/{proposal_id}/approve").status_code == 200
+    assert client.post(f"/api/review/proposals/{proposal_id}/approve", headers={"X-3C-Review-Token": "test-review-only"}).status_code == 200
     return proposal_id
 
 
@@ -70,7 +71,7 @@ def test_readback_reports_real_frequency_change_and_unchanged_unit(monkeypatch):
     command, row = _setup(monkeypatch, writes_reach_sheet=True)
     with TestClient(backend.app) as client:
         proposal_id = _make_proposal(client, command)
-        response = client.post(f"/api/review/proposals/{proposal_id}/apply")
+        response = client.post(f"/api/review/proposals/{proposal_id}/apply", headers={"X-3C-Review-Token": "test-review-only"})
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "applied"
@@ -95,7 +96,7 @@ def test_successful_batch_api_without_cell_change_is_not_applied(monkeypatch):
     command, row = _setup(monkeypatch, writes_reach_sheet=False)
     with TestClient(backend.app) as client:
         proposal_id = _make_proposal(client, command)
-        response = client.post(f"/api/review/proposals/{proposal_id}/apply")
+        response = client.post(f"/api/review/proposals/{proposal_id}/apply", headers={"X-3C-Review-Token": "test-review-only"})
     assert response.status_code == 502
     assert row[11] == "3"
     assert backend.device_commands.get(command["id"])["status"] == "approved_not_applied"
