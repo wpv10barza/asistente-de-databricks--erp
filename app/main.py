@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from decimal import Decimal, InvalidOperation
 import logging
 
 from fastapi import FastAPI, HTTPException, Request
@@ -459,6 +460,17 @@ def reject_review_proposal(proposal_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _sheet_values_match(expected: object, actual: object) -> bool:
+    """Compare Google Sheets formatted readback, allowing numeric format equality."""
+    left, right = str(expected).strip(), str(actual).strip()
+    if left == right:
+        return True
+    try:
+        return Decimal(left) == Decimal(right)
+    except (InvalidOperation, ValueError):
+        return False
+
+
 @app.post("/api/review/proposals/{proposal_id}/apply")
 def apply_review_proposal(proposal_id: str) -> dict:
     try:
@@ -477,6 +489,7 @@ def apply_review_proposal(proposal_id: str) -> dict:
         row=proposal["row"], changes=attempt_changes,
     )
     verification = None
+    verified_changes: list[dict] = []
     try:
         verification = gateway.verify_template()
         if not verification["ok"]:
@@ -495,22 +508,70 @@ def apply_review_proposal(proposal_id: str) -> dict:
             )
             for operation in proposal["operations"]
         ]
+        # Capture prior values only when writes are enabled. An approval alone
+        # never contacts Google Sheets to mutate cells.
+        row_number = proposal["row"]
+        row_range = f"'{settings.sheet_name}'!A{row_number}:AF{row_number}"
+        before_rows = gateway.read_values(row_range) if settings.allow_sheet_write else []
+        before_row = before_rows[0] if before_rows else []
         google_result = gateway.batch_update_cells(changes)
+
+        # A successful batchUpdate response is not enough: read the real row
+        # back before allowing the panel to display APPLIED / VERIFIED.
+        after_rows = gateway.read_values(row_range)
+        after_row = after_rows[0] if after_rows else []
+        for operation in proposal["operations"]:
+            col = operation["columna_actualizar"].strip().upper()
+            column_index = list(SHEET_HEADERS_A_AF).index(col)
+            current = after_row[column_index] if column_index < len(after_row) else ""
+            previous = before_row[column_index] if column_index < len(before_row) else ""
+            wanted = operation["valor_actualizar"]
+            if not _sheet_values_match(wanted, current):
+                raise SheetsError(
+                    f"Google Sheets no confirmo {col}{row_number}: "
+                    "la celda leida no coincide con el valor solicitado."
+                )
+            verified_changes.append({
+                "cell": f"{col}{row_number}",
+                "field": operation["encabezado"],
+                "before": previous,
+                "after": current,
+                "changed": not _sheet_values_match(previous, current),
+                "verified": True,
+            })
+
         applied = review_store.mark_applied(proposal_id)
         command_id = applied.get("external_command_id")
         history_store.append(
             "sheet_applied", proposal_id=proposal_id,
             command_id=command_id, row=applied["row"],
-            changes=[{"cell": cell, "value": str(value)[:180]}
-                     for cell, value in changes],
+            changes=[{
+                "cell": item["cell"], "value": str(item["after"])[:180],
+                "before": str(item["before"])[:180], "changed": item["changed"],
+                "verified": True,
+            } for item in verified_changes],
         )
 
         command_id = applied.get("external_command_id")
+        verified_columns = {op["columna_actualizar"].strip().upper()
+                            for op in proposal["operations"]}
+        if verified_columns & {"L", "M"}:
+            task_id = after_row[4] if len(after_row) > 4 else "?"
+            frequency = after_row[11] if len(after_row) > 11 else "?"
+            time_unit = after_row[12] if len(after_row) > 12 else "?"
+            panel_result = (
+                f"OK Tarea {task_id}: L{row_number}={frequency} "
+                f"M{row_number}={time_unit} VERIFICADO"
+            )
+        else:
+            panel_result = "OK VERIFICADO: " + ", ".join(
+                f"{entry['cell']}={entry['after']}" for entry in verified_changes
+            )
         if command_id:
             updated = device_commands.update(
                 command_id,
                 "applied",
-                f"Propuesta {proposal_id} aplicada.",
+                panel_result,
                 proposal_id=proposal_id,
             )
             logger.info("3c_flow command_id=%s proposal_id=%s status=applied",
@@ -525,6 +586,9 @@ def apply_review_proposal(proposal_id: str) -> dict:
             "proposal": applied,
             "google": google_result,
             "template_verification": verification,
+            "post_write_verification": "live_google_sheets_readback",
+            "verified_changes": verified_changes,
+            "panel_result": panel_result,
         }
     except SheetsError as exc:
         history_store.append(
