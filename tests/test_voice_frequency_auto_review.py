@@ -91,10 +91,10 @@ def test_voice_to_proposal_auth_approval_readback_and_result(monkeypatch):
             ("L6", True), ("M6", False),
         ]
         assert row[11:13] == ["6", "Mes"]
-        command = client.get(f"/api/device/v1/commands/{command_id}")
+        command = client.get(f"/api/device/v1/commands/{command_id}", headers=dev_headers)
         assert command.status_code == 200
-        assert command.json()["status"] == "applied"
-        assert "L6=6 M6=Mes VERIFICADO" in command.json()["result"]
+        assert command.json()["command"]["status"] == "applied"
+        assert "L6=6 M6=Mes VERIFICADO" in command.json()["command"]["result"]
 
 
 def test_ambiguous_task_id_never_generates_automatic_proposal(monkeypatch):
