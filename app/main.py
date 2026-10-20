@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 from decimal import Decimal, InvalidOperation
+import hmac
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
@@ -12,6 +14,7 @@ from .column_map import SHEET_HEADERS_A_AF, WRITE_COLUMNS
 from .config import Settings
 from .device_store import DeviceCommandStore, normalize_device_command, verify_device_token
 from .firmware_ota import FirmwareOtaError, FirmwareOtaStore
+from .frequency_commands import parse_frequency_command, unique_task_row, frequency_operations
 from .google_sheets import SheetsError, SheetsGateway
 from .indexer import SemanticIndex
 from .interpreter import interpret_command
@@ -127,6 +130,16 @@ def _device_authorization(request: Request) -> None:
             raise HTTPException(status_code=401, detail="Token del dispositivo inválido.")
 
 
+def _review_authorization(request: Request) -> None:
+    """A human's separate reviewer secret; never reuse the ESP32 token."""
+    configured = settings.review_approval_token
+    if not configured:
+        raise HTTPException(status_code=503, detail="Revisión deshabilitada: configure REVIEW_APPROVAL_TOKEN.")
+    provided = request.headers.get("x-3c-review-token", "")
+    if not provided or not hmac.compare_digest(configured, provided):
+        raise HTTPException(status_code=403, detail="No autorizado para aprobar Google Sheets.")
+
+
 def _proposal_or_404(proposal_id: str) -> dict:
     try:
         return review_store.get(proposal_id)
@@ -154,6 +167,12 @@ def home() -> str:
       </body>
     </html>
     """
+
+
+@app.get("/review-3c", response_class=HTMLResponse)
+def human_review_screen() -> str:
+    """Browser interface; approvals require a separate human review token."""
+    return Path(__file__).with_name("review3c.html").read_text(encoding="utf-8")
 
 
 @app.get("/voice-3c", response_class=HTMLResponse)
@@ -403,13 +422,43 @@ def create_single_proposal(item: SingleProposalRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.get("/api/review/queue")
+def review_queue(request: Request) -> dict:
+    _review_authorization(request)
+    command = device_commands.latest_for_review()
+    if not command:
+        return {"command": None, "proposal": None, "changes": []}
+    pid = command.get("proposal_id")
+    if not pid:
+        return {"command": command, "proposal": None, "changes": []}
+    try:
+        proposal = review_store.get(pid)
+    except ValueError:
+        return {"command": command, "proposal": None, "changes": []}
+    row = proposal["row"]
+    before = gateway.read_values(f"'{settings.sheet_name}'!A{row}:AF{row}")
+    values = before[0] if before else []
+    changes = []
+    for operation in proposal["operations"]:
+        letter = operation["columna_actualizar"].strip().upper()
+        idx = list(SHEET_HEADERS_A_AF).index(letter)
+        changes.append({
+            "cell": f"{letter}{row}", "field": operation["encabezado"],
+            "before": values[idx] if idx < len(values) else "",
+            "wanted": operation["valor_actualizar"],
+        })
+    return {"command": command, "proposal": proposal, "changes": changes}
+
+
 @app.get("/api/review/proposals/{proposal_id}")
 def get_review_proposal(proposal_id: str) -> dict:
     return _proposal_or_404(proposal_id)
 
 
 @app.post("/api/review/proposals/{proposal_id}/approve")
-def approve_review_proposal(proposal_id: str) -> dict:
+def approve_review_proposal(proposal_id: str, request: Request) -> dict:
+    if settings.allow_sheet_write:
+        _review_authorization(request)
     try:
         proposal = review_store.approve(proposal_id)
         history_store.append(
@@ -433,7 +482,9 @@ def approve_review_proposal(proposal_id: str) -> dict:
 
 
 @app.post("/api/review/proposals/{proposal_id}/reject")
-def reject_review_proposal(proposal_id: str) -> dict:
+def reject_review_proposal(proposal_id: str, request: Request) -> dict:
+    if settings.allow_sheet_write:
+        _review_authorization(request)
     try:
         proposal = review_store.reject(proposal_id)
         command_id = proposal.get("external_command_id")
@@ -472,7 +523,9 @@ def _sheet_values_match(expected: object, actual: object) -> bool:
 
 
 @app.post("/api/review/proposals/{proposal_id}/apply")
-def apply_review_proposal(proposal_id: str) -> dict:
+def apply_review_proposal(proposal_id: str, request: Request) -> dict:
+    if settings.allow_sheet_write:
+        _review_authorization(request)
     try:
         proposal = review_store.require_approved(proposal_id)
     except ValueError as exc:
@@ -604,8 +657,8 @@ def apply_review_proposal(proposal_id: str) -> dict:
 
 @app.post("/api/apply")
 @app.post("/apply")
-def apply_by_id(item: ApplyRequest) -> dict:
-    return apply_review_proposal(item.proposal_id)
+def apply_by_id(item: ApplyRequest, request: Request) -> dict:
+    return apply_review_proposal(item.proposal_id, request)
 
 
 @app.get("/api/device/v1/cloud/verify")
@@ -1006,6 +1059,57 @@ def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict
                 device_id=command["device_id"], text=command["text"],
             )
             logger.info("3c_flow command_id=%s status=pending_confirmation", command["id"])
+            parsed = parse_frequency_command(command["text"])
+            if parsed:
+                task_id, count, unit = parsed
+                try:
+                    template = gateway.verify_template()
+                    if not template["ok"]:
+                        raise ValueError("Los encabezados de la hoja Data no coinciden.")
+                    task_values = gateway.read_values(
+                        f"'{settings.sheet_name}'!E{settings.header_row + 1}:E1000"
+                    )
+                    row = unique_task_row(task_values, task_id, settings.header_row + 1)
+                    operations = frequency_operations(count, unit)
+                    proposal = review_store.propose(
+                        row=row, matched=f"TareaId={task_id}",
+                        operations=operations, external_command_id=command["id"],
+                    )
+                    history_store.append(
+                        "proposal_created", command_id=command["id"],
+                        proposal_id=proposal["id"], row=row,
+                        changes=[
+                            {"cell": f"{op['columna_actualizar']}{row}",
+                             "value": str(op["valor_actualizar"])}
+                            for op in operations
+                        ],
+                    )
+                    history_store.append(
+                        "proposal_preview", command_id=command["id"],
+                        proposal_id=proposal["id"],
+                        changes=[
+                            {"cell": f"{op['columna_actualizar']}{row}",
+                             "value": str(op["valor_actualizar"])}
+                            for op in operations
+                        ],
+                    )
+                    command = device_commands.update(
+                        command["id"], "pending_review",
+                        f"Tarea {task_id}: L{row}={count} M{row}={unit}; aprobar en WEB",
+                        proposal_id=proposal["id"],
+                    )
+                    logger.info("3c_flow command_id=%s proposal_id=%s status=pending_review",
+                                command["id"], proposal["id"])
+                except (SheetsError, ValueError) as exc:
+                    logger.warning(
+                        "3c_flow command_id=%s auto-proposal BLOCKED: %s",
+                        command["id"], str(exc)[:180],
+                    )
+                    # No invented proposal and no write on ambiguous or failed lookup.
+                    history_store.append(
+                        "proposal_blocked", command_id=command["id"],
+                        reason=str(exc)[:180],
+                    )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1016,7 +1120,10 @@ def enqueue_device_command(item: DeviceCommandRequest, request: Request) -> dict
         "duplicate": duplicate,
         "requires_human_confirmation": True,
         "status_path": f"/api/device/v1/commands/{command['id']}",
-        "message": "Comando recibido para revisión humana.",
+        "message": (
+            "Propuesta lista en /review-3c." if command["status"] == "pending_review"
+            else "Comando recibido; requiere revisión humana."
+        ),
     }
 
 

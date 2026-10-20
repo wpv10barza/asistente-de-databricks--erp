@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from threading import RLock
 
 
-DEVICE_COMMAND_TTL_SECONDS = 15 * 60
+DEVICE_COMMAND_TTL_SECONDS = 60 * 60
 DEVICE_COMMAND_LIMIT = 50
 
 _ALLOWED_TRANSITIONS = {
@@ -135,6 +135,16 @@ class DeviceCommandStore:
             )
             selected = pending[position + 1] if 0 <= position < len(pending) - 1 else pending[-1]
             return self._public(selected)
+
+    def latest_for_review(self) -> dict | None:
+        with self._lock:
+            self._prune()
+            for command in reversed(self._commands):
+                if command["status"] in {
+                    "pending_confirmation", "pending_review", "approved_not_applied"
+                }:
+                    return self._public(command)
+        return None
 
     def update(
         self, command_id: str, status: str, result: str = "",

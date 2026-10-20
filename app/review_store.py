@@ -16,7 +16,7 @@ def utc_iso(epoch: float | None = None) -> str:
 
 @dataclass
 class ReviewStore:
-    ttl_seconds: int = 5 * 60
+    ttl_seconds: int = 60 * 60
 
     def __post_init__(self) -> None:
         self._proposals: dict[str, dict] = {}

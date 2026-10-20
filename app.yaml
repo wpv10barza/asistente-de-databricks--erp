@@ -10,7 +10,12 @@ env:
   - name: HEADER_ROW
     value: "4"
   - name: ALLOW_SHEET_WRITE
-    value: "false"
+    value: "true"
+
+  # Create and bind this separate REVIEWER secret in Databricks Apps
+  # before deployment. Do NOT reuse ESP32_API_TOKEN or expose the value.
+  - name: REVIEW_APPROVAL_TOKEN
+    valueFrom: review_approval_token
 
   - name: GEMINI_MODEL
     value: "gemini-3.8-flash"

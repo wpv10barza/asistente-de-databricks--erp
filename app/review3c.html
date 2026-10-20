@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Revisión humana 3C | Google Sheets</title>
+<style>
+body{font:16px system-ui;max-width:920px;margin:30px auto;padding:0 16px;color:#152b39;background:#fff}
+h1{font-size:1.5rem}main{padding:20px;border:1px solid #bdcbd3;border-radius:12px}
+button,input{font:inherit;padding:9px 12px;margin:5px;border:1px solid #82949e;border-radius:7px}
+button{cursor:pointer;background:#f0f5f7}
+button:disabled{cursor:not-allowed;opacity:.5}
+table{border-collapse:collapse;width:100%;margin:14px 0}
+td,th{border-bottom:1px solid #cbd6dd;padding:10px;text-align:left}
+#notice{white-space:pre-wrap}small{color:#475967}
+</style></head><body>
+<main>
+<h1>Revisión de órdenes 3C</h1>
+<p>Una voz o un botón del ESP32 <b>no escribe la hoja directamente</b>. Revise
+la tarea, el valor anterior y el valor propuesto. Aprobar y aplicar son
+dos acciones diferentes.</p>
+<label>Clave de revisión humana (distinta del token ESP32):
+<input id="token" type="password" autocomplete="off" placeholder="Token de revisor"></label>
+<button id="refresh">Consultar propuestas</button>
+<p id="notice" role="status">Aún no consultado.</p>
+<div id="info"></div>
+<table id="changes" hidden><thead><tr><th>Celda</th><th>Campo</th><th>Valor actual</th><th>Propuesto</th></tr></thead><tbody></tbody></table>
+<button id="approve" disabled>Aprobar propuesta</button>
+<button id="reject" disabled>Rechazar</button>
+<button id="apply" disabled>Aplicar a Google Sheets y verificar</button>
+<pre id="result"></pre>
+<small>El token permanece en esta página y no se guarda en el navegador.
+La aplicación exige autorización independiente para aprobar y aplicar.
+Si una propuesta expiró, envíe una nueva orden desde el ESP32.</small>
+</main>
+<script>
+const el=id=>document.getElementById(id);
+let proposal=null, changes=[];
+function notice(msg){el("notice").textContent=msg}
+function setButtons(status){
+  el("approve").disabled=status!=="proposed";
+  el("reject").disabled=!["proposed","approved"].includes(status);
+  el("apply").disabled=status!=="approved";
+}
+async function req(path, method="GET"){
+  if(!el("token").value.trim())throw Error("Introduzca la clave de revisión humana.");
+  const response=await fetch(path,{method,cache:"no-store",credentials:"same-origin",
+    headers:{"X-3C-Review-Token":el("token").value.trim(),"Accept":"application/json"}});
+  let data={};try{data=await response.json()}catch(e){}
+  if(!response.ok)throw Error("HTTP "+response.status+" "+JSON.stringify(data).slice(0,220));
+  return data;
+}
+async function refresh(){
+  setButtons("");
+  const data=await req("/api/review/queue");
+  proposal=data.proposal;changes=data.changes||[];
+  el("result").textContent="";
+  el("info").textContent=data.command?
+    "Comando "+data.command.id+" — "+data.command.text+
+    " | Estado: "+data.command.status : "No hay órdenes pendientes.";
+  const tbody=el("changes").querySelector("tbody");tbody.textContent="";
+  el("changes").hidden=!proposal;
+  if(!proposal){notice("Sin propuesta editable. No se modificó Google Sheets.");return}
+  for(const c of changes){
+    const row=document.createElement("tr");
+    for(const key of ["cell","field","before","wanted"]){
+      const cell=document.createElement("td");cell.textContent=String(c[key]??"");row.append(cell)
+    }
+    tbody.append(row);
+  }
+  notice("Propuesta "+proposal.id+" — Estado: "+proposal.status);
+  setButtons(proposal.status);
+}
+function run(fn){return async()=>{
+  try{notice("Consultando...");await fn()}catch(e){notice("ERROR: "+e.message);setButtons("")}
+}}
+el("refresh").onclick=run(refresh);
+el("approve").onclick=run(async()=>{
+  if(!proposal)throw Error("No hay propuesta.");
+  if(!confirm("¿APRUEBA exactamente estas celdas y valores? No escribe aún."))return refresh();
+  await req("/api/review/proposals/"+encodeURIComponent(proposal.id)+"/approve","POST");
+  await refresh();
+});
+el("reject").onclick=run(async()=>{
+  if(!proposal)return;
+  if(!confirm("¿Rechazar propuesta sin modificar Sheets?"))return refresh();
+  await req("/api/review/proposals/"+encodeURIComponent(proposal.id)+"/reject","POST");
+  await refresh();
+});
+el("apply").onclick=run(async()=>{
+  if(!proposal)throw Error("No hay propuesta.");
+  if(!confirm("¿APLICAR los cambios aprobados en GOOGLE SHEETS? Se verificará con lectura real."))return refresh();
+  const result=await req("/api/review/proposals/"+encodeURIComponent(proposal.id)+"/apply","POST");
+  el("result").textContent=JSON.stringify({status:result.status,
+    verified_changes:result.verified_changes,
+    post_write_verification:result.post_write_verification},null,2);
+  setButtons("");
+  notice(result.status==="applied"?"APLICADO Y VERIFICADO: revise las celdas detalladas.":"Sin escritura confirmada");
+});
+</script></body></html>
