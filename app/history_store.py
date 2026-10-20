@@ -220,8 +220,20 @@ def panel_lines(data: dict) -> str:
             _clean(order.get("text"), 145), _clean(preview_text, 145),
         ]))
     for event in data.get("sheet_activity", []):
+        # A successful Sheets readback carries the prior value and a truthfully
+        # marked change. Display before -> after on the actual panel history.
+        def describe_sheet_change(change: dict) -> str:
+            cell = _clean(change.get("cell"), 12)
+            after = _clean(change.get("value"), 55)
+            if change.get("verified") is True:
+                if change.get("changed") is True:
+                    before = _clean(change.get("before"), 45)
+                    return cell + ": " + before + " -> " + after
+                return cell + "=" + after + " (sin cambio)"
+            return cell + "=" + after
+
         details = " | ".join(
-            _clean(change.get("cell"), 12) + "=" + _clean(change.get("value"), 65)
+            describe_sheet_change(change)
             for change in (event.get("changes") or [])[:2]
         )
         if not details:
