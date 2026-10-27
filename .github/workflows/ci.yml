@@ -34,6 +34,22 @@ jobs:
       - name: Tests
         run: pytest
 
+      - name: Student lab seven-day expiry and billing contract
+        run: python tests/test_lab_cost_guard.py
+
+      - name: Parse student lab PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            'scripts/Lab-Alumno-3C.ps1', [ref]$tokens, [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-Table
+            exit 1
+          }
+
       - name: Databricks startup smoke test
         env:
           DATABRICKS_APP_PORT: "8000"
