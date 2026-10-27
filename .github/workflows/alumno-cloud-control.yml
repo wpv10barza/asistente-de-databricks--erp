@@ -42,6 +42,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Operaciones sobre Databricks alumno permitidas solo desde la rama main."
+            exit 1
+          fi
           if [[ "$GITHUB_REPOSITORY" != "wpv10barza/asistente-de-databricks--erp" ]]; then
             echo "::error::Repositorio de control no autorizado."
             exit 1
