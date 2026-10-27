@@ -132,15 +132,14 @@ def _proposal_or_404(proposal_id: str) -> dict:
     try:
         return review_store.get(proposal_id)
     except ValueError as exc:
-        raise HTTPException(sta@app.get("/", response_class=HTMLResponse)
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/", response_class=HTMLResponse)
 @app.get("/acceso", response_class=HTMLResponse)
 def home() -> str:
     """Portal académico detrás de autenticación Databricks Apps (SSO/ACL)."""
     return render_portal()
-rticle>
-      </body>
-    </html>
-    """
 
 
 @app.get("/voice-3c", response_class=HTMLResponse)
