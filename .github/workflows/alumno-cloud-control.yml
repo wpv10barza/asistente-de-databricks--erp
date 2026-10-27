@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "Accion para asistente-cloud-erp-alumno (solo cuenta alumna)"
+        description: "Accion para asistente-cloud-erp-alumno (solo workspace alumno)"
         required: true
         type: choice
         options:
@@ -25,64 +25,96 @@ concurrency:
 
 jobs:
   control:
-    name: Control cloud (sin compilar firmware)
+    name: Control cloud alumno | sin compilar firmware
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: prod
     env:
       DATABRICKS_AUTH_TYPE: github-oidc
-      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      # Destino fijo: NUNCA reutilizar variables HOST del workspace original.
+      DATABRICKS_HOST: https://dbc-77f7771e-2520.cloud.databricks.com
+      # ID real de un service principal federado en el workspace alumno.
       DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
       STUDENT_APP: asistente-cloud-erp-alumno
       ACTION: ${{ inputs.action }}
     steps:
-      - name: Preflight identity and workspace
+      - name: Verificar repositorio, destino y configuracion OIDC (sin consumo)
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Operaciones sobre Databricks alumno permitidas solo desde la rama main."
+            exit 1
+          fi
+          if [[ "$GITHUB_REPOSITORY" != "wpv10barza/asistente-de-databricks--erp" ]]; then
+            echo "::error::Repositorio de control no autorizado."
+            exit 1
+          fi
           if [[ "$DATABRICKS_HOST" != "https://dbc-77f7771e-2520.cloud.databricks.com" ]]; then
-            echo "::error::Workspace incorrecto: no se opera el workspace original"
+            echo "::error::Bloqueado: workspace distinto del alumno-3c."
             exit 1
           fi
-          if [[ -z "$DATABRICKS_CLIENT_ID" ]]; then
-            echo "::error::Configura DATABRICKS_CLIENT_ID como variable del entorno prod, con federacion OIDC."
+          if [[ -z "$DATABRICKS_CLIENT_ID" || "$DATABRICKS_CLIENT_ID" == "CHANGE_ME" ]]; then
+            echo "::error::Falta GitHub Settings > Environments > prod > Environment variables > DATABRICKS_CLIENT_ID. Debe ser el Application ID REAL de un principal de servicio Databricks con federacion GitHub OIDC; no un correo, PAT ni token ESP32."
+            echo "### Configuracion pendiente (sin iniciar Databricks)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- En el repo del backend, crear la variable DATABRICKS_CLIENT_ID en Environment prod." >> "$GITHUB_STEP_SUMMARY"
+            echo "- Configurar una federation policy GitHub OIDC con sujeto environment:prod en el service principal y otorgar CAN MANAGE sobre la App alumna." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+          echo "Workspace alumno y Application ID presentes; validando OIDC..."
 
-      - uses: databricks/setup-cli@main
+      - name: Instalar Databricks CLI
+        uses: databricks/setup-cli@main
 
-      - name: Verificar App del alumno y repositorio canónico
+      - name: Verificar autentificacion OIDC sin encender la App
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! databricks current-user me --output json > "$RUNNER_TEMP/databricks-oidc-user.json"; then
+            echo "::error::GitHub OIDC no pudo autenticarse en Databricks alumno. Verifica el Application ID, federation policy (issuer, audience, sub environment:prod) y acceso del principal al workspace alumno."
+            exit 1
+          fi
+          echo "Federacion OIDC: autenticacion verificada."
+
+      - name: Verificar identidad exacta de la App alumna
         shell: bash
         run: |
           set -euo pipefail
           databricks apps get "$STUDENT_APP" --output json > "$RUNNER_TEMP/alumno-app.json"
           python3 - <<'PY'
-          import json, os
+          import json
+          import os
           from pathlib import Path
-          a = json.loads((Path(os.environ["RUNNER_TEMP"]) / "alumno-app.json").read_text())
-          assert a.get("name") == "asistente-cloud-erp-alumno", "App equivocada"
-          git = (a.get("git_repository") or {}).get("url", "").removesuffix(".git").rstrip("/")
-          assert git == "https://github.com/wpv10barza/asistente-de-databricks--erp", "Repositorio backend inesperado"
-          print("App y repositorio alumno verificados")
+
+          app = json.loads((Path(os.environ["RUNNER_TEMP"]) / "alumno-app.json").read_text())
+          if app.get("name") != "asistente-cloud-erp-alumno":
+              raise SystemExit("App incorrecta: NO se ejecuta ninguna accion")
+          expected = "https://github.com/wpv10barza/asistente-de-databricks--erp"
+          configured = ((app.get("git_repository") or {}).get("url") or "").removesuffix(".git").rstrip("/")
+          if configured and configured.lower() != expected.lower():
+              raise SystemExit("Git repository inesperado: NO se ejecuta ninguna accion")
+          if os.environ["ACTION"] == "redeploy" and configured.lower() != expected.lower():
+              raise SystemExit("REDEPLOY requiere configurar primero el repositorio Git del backend en la App alumna. START/STATUS no requieren Git.")
+          print("Destino confirmado: asistente-cloud-erp-alumno")
           PY
 
-      - name: Estado actual (no modifica)
+      - name: Estado actual (sin cambios ni inicio de compute)
         if: ${{ inputs.action == 'status' }}
         run: databricks apps get "$STUDENT_APP" --output json
 
-      - name: Iniciar App existente (sin deploy)
+      - name: Iniciar App existente (sin recompilar ni desplegar)
         if: ${{ inputs.action == 'start' }}
         run: databricks apps start "$STUDENT_APP" --timeout 20m
 
-      - name: Detener App y el consumo de su compute
+      - name: Detener App (compute)
         if: ${{ inputs.action == 'stop' }}
         run: databricks apps stop "$STUDENT_APP" --timeout 20m
 
-      - name: Desplegar solo backend de Git main (sin firmware)
+      - name: Desplegar solo backend Git main (puede iniciar compute)
         if: ${{ inputs.action == 'redeploy' }}
         run: databricks apps deploy "$STUDENT_APP" --git-branch main --timeout 20m
 
-      - name: Actualizar acceso alumno/docente sin reemplazar ACL
+      - name: Otorgar acceso alumno/docente (sin sustituir la ACL)
         if: ${{ inputs.action == 'grant_access' }}
         shell: bash
         run: |
@@ -95,15 +127,23 @@ jobs:
           }'
           databricks apps get-permissions "$STUDENT_APP" --output json
 
-      - name: Resumen de la accion
+      - name: Confirmar estado final y resumen
         if: success()
         shell: bash
         run: |
-          {
-            echo "### Databricks App alumno"
-            echo "- Accion: $ACTION"
-            echo "- App: $STUDENT_APP"
-            echo "- Workspace: alumno (aislado de produccion original)"
-            echo "- START/STOP no recompilan firmware ni reinstalan dependencias."
-            echo "- En grant_access las cuentas deben existir en la organizacion Databricks."
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          databricks apps get "$STUDENT_APP" --output json > "$RUNNER_TEMP/alumno-after.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          app = json.loads((Path(os.environ["RUNNER_TEMP"]) / "alumno-after.json").read_text())
+          state = (app.get("compute_status") or {}).get("state") or (app.get("app_status") or {}).get("state") or "VER_EN_CONSOLA"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write("### Control Databricks: workspace alumno-3c\n")
+              out.write(f"- App: asistente-cloud-erp-alumno\n- Accion solicitada: {os.environ['ACTION']}\n")
+              out.write(f"- Estado reportado: {state}\n")
+              out.write("- No se compilo el firmware, ni se uso el workspace original.\n")
+              out.write("- START/REDEPLOY pueden generar consumo de Databricks.\n")
+          PY
