@@ -1,0 +1,109 @@
+name: Alumno Cloud | Control rapido
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Accion para asistente-cloud-erp-alumno (solo cuenta alumna)"
+        required: true
+        type: choice
+        options:
+          - status
+          - start
+          - stop
+          - redeploy
+          - grant_access
+        default: status
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: alumno-cloud-control
+  cancel-in-progress: false
+
+jobs:
+  control:
+    name: Control cloud (sin compilar firmware)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: prod
+    env:
+      DATABRICKS_AUTH_TYPE: github-oidc
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
+      STUDENT_APP: asistente-cloud-erp-alumno
+      ACTION: ${{ inputs.action }}
+    steps:
+      - name: Preflight identity and workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$DATABRICKS_HOST" != "https://dbc-77f7771e-2520.cloud.databricks.com" ]]; then
+            echo "::error::Workspace incorrecto: no se opera el workspace original"
+            exit 1
+          fi
+          if [[ -z "$DATABRICKS_CLIENT_ID" ]]; then
+            echo "::error::Configura DATABRICKS_CLIENT_ID como variable del entorno prod, con federacion OIDC."
+            exit 1
+          fi
+
+      - uses: databricks/setup-cli@main
+
+      - name: Verificar App del alumno y repositorio canónico
+        shell: bash
+        run: |
+          set -euo pipefail
+          databricks apps get "$STUDENT_APP" --output json > "$RUNNER_TEMP/alumno-app.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          a = json.loads((Path(os.environ["RUNNER_TEMP"]) / "alumno-app.json").read_text())
+          assert a.get("name") == "asistente-cloud-erp-alumno", "App equivocada"
+          git = (a.get("git_repository") or {}).get("url", "").removesuffix(".git").rstrip("/")
+          assert git == "https://github.com/wpv10barza/asistente-de-databricks--erp", "Repositorio backend inesperado"
+          print("App y repositorio alumno verificados")
+          PY
+
+      - name: Estado actual (no modifica)
+        if: ${{ inputs.action == 'status' }}
+        run: databricks apps get "$STUDENT_APP" --output json
+
+      - name: Iniciar App existente (sin deploy)
+        if: ${{ inputs.action == 'start' }}
+        run: databricks apps start "$STUDENT_APP" --timeout 20m
+
+      - name: Detener App y el consumo de su compute
+        if: ${{ inputs.action == 'stop' }}
+        run: databricks apps stop "$STUDENT_APP" --timeout 20m
+
+      - name: Desplegar solo backend de Git main (sin firmware)
+        if: ${{ inputs.action == 'redeploy' }}
+        run: databricks apps deploy "$STUDENT_APP" --git-branch main --timeout 20m
+
+      - name: Actualizar acceso alumno/docente sin reemplazar ACL
+        if: ${{ inputs.action == 'grant_access' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          databricks apps update-permissions "$STUDENT_APP" --json '{
+            "access_control_list": [
+              {"user_name": "polovaleriow@gmail.com", "permission_level": "CAN_USE"},
+              {"user_name": "wpvbar11@gmail.com", "permission_level": "CAN_MANAGE"}
+            ]
+          }'
+          databricks apps get-permissions "$STUDENT_APP" --output json
+
+      - name: Resumen de la accion
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "### Databricks App alumno"
+            echo "- Accion: $ACTION"
+            echo "- App: $STUDENT_APP"
+            echo "- Workspace: alumno (aislado de produccion original)"
+            echo "- START/STOP no recompilan firmware ni reinstalan dependencias."
+            echo "- En grant_access las cuentas deben existir en la organizacion Databricks."
+          } >> "$GITHUB_STEP_SUMMARY"
