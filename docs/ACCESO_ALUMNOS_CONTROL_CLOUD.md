@@ -15,7 +15,7 @@
 ## Primer arranque seguro
 
 1. En Databricks, asegure que **las dos cuentas existan**. Verifique la App `asistente-cloud-erp-alumno` y la configuracion OAuth, secretos y volumen. No modifique el workspace original.
-2. En GitHub > Settings > Environments > `prod`, configure `DATABRICKS_HOST=https://dbc-77f7771e-2520.cloud.databricks.com` y `DATABRICKS_CLIENT_ID=<application ID del service principal GitHub OIDC>`. El principal debe tener federacion OIDC y `CAN MANAGE` sobre la App.
+2. En GitHub > Settings > Environments > **`alumno-cloud` (entorno independiente del `prod` original)**, configure `DATABRICKS_HOST=https://dbc-77f7771e-2520.cloud.databricks.com` y `DATABRICKS_CLIENT_ID=<application ID del service principal GitHub OIDC>`. El principal debe tener federacion OIDC y `CAN MANAGE` sobre la App.
 3. En [Alumno Cloud | Control rapido](https://github.com/wpv10barza/asistente-de-databricks--erp/actions/workflows/alumno-cloud-control.yml), seleccione `grant_access`. Esto usa `update-permissions` (incremental, no reemplaza la lista existente).
 4. Seleccione `status`, `start`, `redeploy` o `stop` segun la necesidad. START usa el ultimo despliegue; redeploy usa `main` solo si cambió el backend.
 5. Compruebe que alumno/profesor pueden entrar con sus propias identidades desde un navegador. Compruebe `/api/health` y Device API; verificar que `ALLOW_SHEET_WRITE=false`.
@@ -37,8 +37,15 @@
 
 ## Despliegue rapido vs completo
 
-- **status/start/stop/grant_access**: sin clonar repo, pytest, PlatformIO, firmware u OTA; su duracion depende de la transicion del servicio Databricks.
-- **redeploy**: recompila/reinstala el entorno de App desde el Git conectado cuando haga falta; puede tardar minutos.
+- **status/start/stop/grant_access**: sin clonar repo, pytest, PlatformIO, firmware u OTA. `start` y `stop` envían la solicitud con `--no-wait`; el workflow termina antes, pero la App puede seguir iniciándose o deteniéndose. Ejecute `status` para confirmar el estado real.
+- **redeploy**: despliega el backend desde la rama `main` y **sí espera el resultado** para detectar un fallo real. La duración del arranque de Databricks no se elimina acortando la espera de GitHub.
 - El workflow `firmware-cd.yml` del repo `erp-mantto-esp32` se mantiene para una publicacion OTA distinta; no activarlo para cada clase.
 
 **No se concede acceso anónimo a Databricks Apps ni se inicia compute desde una petición HTTP no autenticada.**
+
+## Separación estricta de entornos
+
+- El workflow académico usa **solo** el GitHub Environment `alumno-cloud` con sus propias `DATABRICKS_HOST` y `DATABRICKS_CLIENT_ID`. No reutilice `prod`: el deploy original apunta a otro workspace y podría afectar su configuración.
+- Aplique reglas de protección y aprobadores autorizados al Environment `alumno-cloud`. GitHub Actions no proporciona autenticación interactiva al alumno; el navegador utiliza Databricks SSO/OTP.
+- `start` y `stop` ahora son solicitudes asíncronas. Una ejecución verde confirma que Databricks recibió la solicitud, **no** que ya está `RUNNING` o `STOPPED`. Use `status` antes de declarar el sistema disponible.
+- Para `grant_access`, las cuentas deben existir en el Databricks account del workspace del alumno y el principal OIDC requiere permisos para administrar el acceso. No se alteran los permisos del workspace original.
