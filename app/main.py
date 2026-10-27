@@ -135,22 +135,47 @@ def _proposal_or_404(proposal_id: str) -> dict:
 
 
 @app.get("/", response_class=HTMLResponse)
+@app.get("/acceso", response_class=HTMLResponse)
 def home() -> str:
+    """Authenticated Databricks Apps entrypoint; SSO/ACLs are enforced upstream."""
     return """
     <!doctype html>
     <html lang="es">
-      <head><meta charset="utf-8"><title>Asistente 3C Databricks</title></head>
-      <body style="font-family:system-ui;max-width:900px;margin:40px auto;line-height:1.5">
-        <h1>Asistente 3C + ERP — Databricks</h1>
-        <p>API cloud activa. La IA propone; el backend valida; la persona confirma.</p>
-        <ul>
-          <li><a href="/docs">OpenAPI / revisión interactiva</a></li>
-          <li><a href="/api/health">Health</a></li>
-          <li><a href="/api/index/status">Índice Pocket</a></li>
-          <li><a href="/api/device/v1/health">Device API</a></li>
-          <li><a href="/voice-3c">Modulo IA / Voz 3C (Windows a ESP32)</a></li>
-        </ul>
-        <p>Google Sheets escribe solo si existe aprobación humana y ALLOW_SHEET_WRITE=true.</p>
+      <head>
+        <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Acceso académico 3C | Databricks</title>
+        <style>
+          body{font-family:system-ui,sans-serif;background:#f1f5f9;color:#12243a;max-width:900px;margin:30px auto;padding:0 20px;line-height:1.55}
+          header,article{background:white;border:1px solid #dce5ed;border-radius:14px;padding:22px;margin:14px 0}
+          a.button{display:inline-block;background:#176f62;color:white;text-decoration:none;border-radius:9px;padding:9px 14px;margin:5px 7px 5px 0}
+          small{color:#46586d}code{word-break:break-all}
+        </style>
+      </head>
+      <body>
+        <header>
+          <h1>Interfaz portátil 3C — Conexión al backend</h1>
+          <p>Backend: <strong>Databricks Apps</strong>. Si puedes abrir esta página después de autenticarte, el backend está activo. El equipo docente controla cuándo se enciende o apaga la App.</p>
+          <p><small>El acceso se valida mediante el inicio de sesión institucional de Databricks (SSO/OTP) y los permisos de la App. No se introducen contraseñas aquí ni en la pantalla ESP32.</small></p>
+        </header>
+        <article>
+          <h2>Acceso del alumno</h2>
+          <p>Utiliza tu cuenta autorizada de Databricks y permiso <code>CAN_USE</code>. Las operaciones sobre órdenes siguen requiriendo revisión humana.</p>
+          <a class="button" href="/api/index/status">Abrir índice Pocket</a>
+          <a class="button" href="/voice-3c">Módulo IA / Voz 3C</a>
+          <a class="button" href="/docs">Interfaz API</a>
+        </article>
+        <article>
+          <h2>Control docente</h2>
+          <p>Para encender, detener o desplegar el backend aunque el PC esté apagado, el docente autorizado usa GitHub Actions con identidad federada. No se ejecutan órdenes de control desde el token del dispositivo ESP32.</p>
+          <a class="button" href="https://github.com/wpv10barza/asistente-de-databricks--erp/actions/workflows/alumno-cloud-control.yml">Abrir control cloud en GitHub</a>
+        </article>
+        <article>
+          <h2>Estado y diagnóstico</h2>
+          <a class="button" href="/api/health">Estado de la API</a>
+          <a class="button" href="/api/device/v1/health">Estado del dispositivo</a>
+          <p><small>Si la App está detenida, esta página tampoco se puede abrir: actívala primero desde GitHub Actions o la consola de Databricks. No supone una conexión directa entre tu PC y el backend.</small></p>
+          <p><small>La escritura de Google Sheets permanece deshabilitada por defecto y requiere aprobación humana.</small></p>
+        </article>
       </body>
     </html>
     """
