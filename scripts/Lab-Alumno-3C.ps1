@@ -28,14 +28,14 @@ function Invoke-GhText {
 
 function Get-GhVariable {
     param([string]$Name)
-    $result = & gh variable get $Name --env prod --repo $Repo 2>$null
+    $result = & gh variable get $Name --env alumno-3c --repo $Repo 2>$null
     if ($LASTEXITCODE -ne 0) { return '' }
     return ([string]($result | Out-String)).Trim()
 }
 
 function Set-GhVariable {
     param([string]$Name, [string]$Value)
-    & gh variable set $Name --env prod --repo $Repo --body $Value
+    & gh variable set $Name --env alumno-3c --repo $Repo --body $Value
     if ($LASTEXITCODE -ne 0) { throw "No se pudo configurar $Name en GitHub prod." }
 }
 
@@ -115,10 +115,10 @@ if ($Compute -ne 'STOPPED') {
 $HostConfigured = Get-GhVariable 'DATABRICKS_HOST'
 $OidcPrincipal = Get-GhVariable 'DATABRICKS_CLIENT_ID'
 if ($HostConfigured -ne $ExpectedHost -or [string]::IsNullOrWhiteSpace($OidcPrincipal)) {
-    throw 'Configurar DATABRICKS_HOST y DATABRICKS_CLIENT_ID del entorno prod antes de Iniciar.'
+    throw 'Configurar DATABRICKS_HOST y DATABRICKS_CLIENT_ID del entorno alumno-3c antes de Iniciar.'
 }
 # Workflows added in an unmerged PR are not operational; require default branch.
-Invoke-GhText @('workflow', 'view', $Workflow, '--repo', $Repo) | Out-Null
+Invoke-GhText -Arguments @('workflow', 'view', $Workflow, '--repo', $Repo) | Out-Null
 $now = [datetime]::UtcNow
 $end = $now.AddHours($Horas)
 $startIso = $now.ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -127,7 +127,7 @@ Set-GhVariable 'LAB_END_UTC' $endIso
 Set-GhVariable 'LAB_STARTED_UTC' $startIso
 # Delete the previous stop marker if it exists.
 if ($Stopped) {
-    & gh variable delete LAB_STOPPED_UTC --env prod --repo $Repo
+    & gh variable delete LAB_STOPPED_UTC --env alumno-3c --repo $Repo
     if ($LASTEXITCODE -ne 0) { throw 'No se pudo limpiar el marcador de apagado anterior.' }
 }
 
