@@ -49,3 +49,9 @@
 - Aplique reglas de protección y aprobadores autorizados al Environment `alumno-cloud`. GitHub Actions no proporciona autenticación interactiva al alumno; el navegador utiliza Databricks SSO/OTP.
 - `start` y `stop` ahora son solicitudes asíncronas. Una ejecución verde confirma que Databricks recibió la solicitud, **no** que ya está `RUNNING` o `STOPPED`. Use `status` antes de declarar el sistema disponible.
 - Para `grant_access`, las cuentas deben existir en el Databricks account del workspace del alumno y el principal OIDC requiere permisos para administrar el acceso. No se alteran los permisos del workspace original.
+
+### OIDC al cambiar de `prod` a `alumno-cloud`
+
+El administrador debe crear o ajustar la **federation policy** del service principal de GitHub para que acepte exactamente el `sub` emitido por el nuevo GitHub Environment `alumno-cloud`, no el anterior `prod`. El patrón clásico es `repo:wpv10barza/asistente-de-databricks--erp:environment:alumno-cloud`, pero algunos repositorios usan IDs inmutables en el subject: compruebe el formato real del token antes de establecer la política. Nunca imprima el JWT completo en Actions.
+
+La cuenta docente necesita permisos de escritura/aprobación sobre el repositorio y Environment para lanzar `workflow_dispatch`; el permiso `CAN_MANAGE` de Databricks **no** concede por sí mismo permisos de GitHub. Si solo administra Databricks, puede iniciar la App desde su consola autorizada.
