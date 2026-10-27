@@ -46,7 +46,7 @@ jobs:
             exit 1
           fi
           if [[ -z "$DATABRICKS_CLIENT_ID" ]]; then
-            echo "::error::Configura DATABRICKS_CLIENT_ID como variable del entorno prod, con federacion OIDC."
+            echo "::error::Configura DATABRICKS_CLIENT_ID como variable del entorno alumno-cloud, con federacion OIDC."
             exit 1
           fi
 
@@ -69,7 +69,8 @@ jobs:
 
       - name: Estado actual (no modifica)
         if: ${{ inputs.action == 'status' }}
-        run: cat "$RUNNER_TEMP/alumno-app.json"
+        run: |
+          jq '{name, state: .app_status.state, url, active_deployment: .active_deployment.deployment_id}' "$RUNNER_TEMP/alumno-app.json"
 
       - name: Iniciar App existente (sin deploy)
         if: ${{ inputs.action == 'start' }}
