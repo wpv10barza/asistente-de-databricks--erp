@@ -24,7 +24,7 @@ assert "asistente-cloud-erp-alumno" in flow
 assert "asistente-cloud-erp-7474651957738908" not in flow
 assert "dbc-a1aca8aa-28bd" not in flow
 assert "APP=asistente-cloud-erp-alumno" in flow
-assert "state != \\"STOPPED\\"" in flow
+assert 'state != "STOPPED"' in flow
 assert "configured=false" in flow
 
 assert "ValidateRange(1, 168)" in ps
@@ -46,7 +46,7 @@ assert "DATE_TRUNC('HOUR', usage_start_time)" in sql
 assert "JOIN student_workspace" in sql
 assert not re.search(r"\b(drop|delete|truncate|insert|update|merge)\s+(into|from|table|system\.)", sql, flags=re.I)
 
-assert "schedule" in doc and "14 dias" in doc and "84 DBU" in doc
+assert "cron" in doc and "14 dias" in doc and "84 DBU" in doc
 assert "alumno-3c" in doc
 assert "deploy-databricks.yml" in base_flow
 assert "dbc-a1aca8aa-28bd.cloud.databricks.com" not in flow
