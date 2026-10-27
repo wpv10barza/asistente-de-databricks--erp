@@ -48,7 +48,7 @@ assert not re.search(r"\b(drop|delete|truncate|insert|update|merge)\s+(into|from
 
 assert "cron" in doc and "14 dias" in doc and "84 DBU" in doc
 assert "alumno-3c" in doc
-assert "deploy-databricks.yml" in base_flow
+assert "databricks bundle deploy --target prod" in base_flow
 assert "dbc-a1aca8aa-28bd.cloud.databricks.com" not in flow
 assert "dbc-a1aca8aa-28bd.cloud.databricks.com" in (ROOT / "databricks.yml").read_text(encoding="utf-8"), "Original deploy must remain untouched"
 print("Student lab expiry guard, planned horometer and billing SQL: PASS")
