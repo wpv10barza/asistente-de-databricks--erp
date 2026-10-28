@@ -44,7 +44,7 @@ if a[:3]==["account","service-principals-v2","create"]:
 if a[:3]==["account","workspace-assignment","update"]:
   out({"status":"ok"})
 if a[:2]==["api","get"] and "/workspace-assignments/" in a[2]:
-  out({"principal_id":72574283613480,
+  out({"principal_id":int(a[2].rstrip("/").split("/")[-1]),
        "workspace_id":7474657268940105,
        "account_id":"e6cf2e56-e1fa-464b-91b0-39517832bde0",
        "entitlements":json.loads(os.environ.get("MOCK_IAM_ENTITLEMENTS",'["WORKSPACE_ACCESS"]')),
@@ -149,6 +149,6 @@ def test_student_workspace_entitlement_grant_is_scoped_and_idempotent(tmp_path):
     p, log = run_mocked(tmp_path, [], "--apply", "--status",
                         policies=[], confirmation="CONFIGURAR-ALUMNO\n")
     assert p.returncode == 0, (p.stdout, p.stderr)
-    assert 'api get /api/2.0/identity/accounts/e6cf2e56-e1fa-464b-91b0-39517832bde0/workspaces/7474657268940105/workspace-assignments/72574283613480' in log
+    assert 'api get /api/2.0/identity/accounts/e6cf2e56-e1fa-464b-91b0-39517832bde0/workspaces/7474657268940105/workspace-assignments/12345' in log
     assert "api patch" not in log  # pre-existing entitlement must be preserved
     assert "gh workflow run alumno-cloud-control.yml" in log
