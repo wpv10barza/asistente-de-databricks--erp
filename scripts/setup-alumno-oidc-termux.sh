@@ -103,6 +103,36 @@ sp_account="$(get '.account_id // .accountId // ""' "$principal")"
 echo "[OK] Principal id=$spid, Application ID=$client"
 write_json assign '{"permissions":["USER"]}'
 ac workspace-assignment update "$WS" "$spid" --json "@$TMPDIR_RUN/assign" >/dev/null
+# Membership role USER alone does not supply workspace entitlements.
+# Without WORKSPACE_ACCESS, GitHub OIDC current-user me is disabled.
+# Account IAM v2 is scoped to the previously VERIFIED student account/workspace/SP.
+assignment_path="/api/2.0/identity/accounts/$ACC/workspaces/$WS/workspace-assignments/$spid"
+assignment_error="$TMPDIR_RUN/iam-get-error"
+if assignment="$(databricks api get "$assignment_path" --profile "$ACCOUNT_PROFILE" --output json 2>"$assignment_error")"; then
+  jq -e --arg account "$ACC" --arg ws "$WS" --arg principal "$spid" '
+    (.account_id==$account) and ((.workspace_id|tostring)==$ws) and ((.principal_id|tostring)==$principal)
+  ' <<<"$assignment" >/dev/null || fail 'IAM asignado a cuenta/workspace/principal distinto del ALUMNO'
+  if jq -e '((.entitlements // []) + (.effective_entitlements // [])) | index("WORKSPACE_ACCESS") != null' <<<"$assignment" >/dev/null; then
+    echo '[OK] WORKSPACE_ACCESS efectivo; no se cambian entitlements'
+  else
+    updated_entitlements="$(jq -c '(.entitlements // []) + ["WORKSPACE_ACCESS"] | unique' <<<"$assignment")"
+    new_assignment="$(jq -nc --argjson principal "$spid" --argjson ents "$updated_entitlements" '{principal_id:$principal,entitlements:$ents}')"
+    write_json iam_patch "$new_assignment"
+    databricks api patch "$assignment_path?update_mask=entitlements" --profile "$ACCOUNT_PROFILE" --json "@$TMPDIR_RUN/iam_patch" --output json >/dev/null || fail 'No se pudo otorgar WORKSPACE_ACCESS a GitHub OIDC'
+    echo '[OK] WORKSPACE_ACCESS agregado sin eliminar otras habilitaciones'
+  fi
+else
+  if ! grep -Eqi '(^|[^0-9])404([^0-9]|$)|NOT_FOUND|not found' "$assignment_error"; then
+    fail 'No se pudo consultar IAM v2; no asumir una asignacion inexistente'
+  fi
+  new_assignment="$(jq -nc --argjson principal "$spid" '{principal_id:$principal,entitlements:["WORKSPACE_ACCESS"]}')"
+  write_json iam_create "$new_assignment"
+  databricks api post "/api/2.0/identity/accounts/$ACC/workspaces/$WS/workspace-assignments" --profile "$ACCOUNT_PROFILE" --json "@$TMPDIR_RUN/iam_create" --output json >/dev/null || fail 'No se pudo crear asignacion IAM v2'
+  echo '[OK] Asignacion IAM v2 creada con WORKSPACE_ACCESS minimo'
+fi
+confirmed_access="$(databricks api get "$assignment_path" --profile "$ACCOUNT_PROFILE" --output json)" || fail 'No se pudo verificar entitlement IAM'
+jq -e '((.entitlements // []) + (.effective_entitlements // [])) | index("WORKSPACE_ACCESS") != null' <<<"$confirmed_access" >/dev/null || fail 'WORKSPACE_ACCESS no confirmado; no se solicita status'
+echo '[OK] Acceso workspace del principal OIDC confirmado (sin iniciar compute)'
 policies="$(ac service-principal-federation-policy list "$spid")"
 policy_page="$(jq -er 'if type=="array" then "" elif type=="object" then (.next_page_token // .nextPageToken // "") else error("unexpected policy list type") end' <<<"$policies")" || fail 'Tipo inesperado de lista de políticas'
 [[ -z "$policy_page" ]] || fail 'Policies paginadas, revisar manual'
