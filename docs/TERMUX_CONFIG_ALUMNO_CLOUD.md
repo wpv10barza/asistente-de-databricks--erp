@@ -29,6 +29,20 @@ Usa una identidad con permisos administrativos de la CUENTA ALUMNA para crear el
 
 ## 3. Primero solo lectura
 
+Si aparece `jq: Cannot index array with string "next_page_token"` o
+`Cannot index array with string "Resources"`, actualiza el script ya
+instalado en Ubuntu, **sin repetir los logins ni instalar Ubuntu**:
+
+~~~sh
+curl -fLsS https://raw.githubusercontent.com/wpv10barza/asistente-de-databricks--erp/main/scripts/setup-alumno-oidc-termux.sh -o /root/Alumno3C/setup-alumno-oidc-termux.sh && bash -n /root/Alumno3C/setup-alumno-oidc-termux.sh && bash /root/Alumno3C/setup-alumno-oidc-termux.sh
+~~~
+
+La salida `[SOLO LECTURA]` significa que no se modificó Databricks ni GitHub.
+El CLI Databricks puede devolver la lista de principals como **array JSON**
+`[]` o como objeto con `Resources`; el script corregido maneja ambos
+formatos y bloquea resultados incompletos/paginados.
+
+
 ~~~sh
 bash /root/Alumno3C/setup-alumno-oidc-termux.sh
 ~~~
