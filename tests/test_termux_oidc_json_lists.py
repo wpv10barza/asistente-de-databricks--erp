@@ -43,6 +43,14 @@ if a[:3]==["account","service-principals-v2","create"]:
   out({"id":"12345","applicationId":"6b0e842c-574f-455f-a623-951411efcc19","displayName":"github-actions-alumno-3c"})
 if a[:3]==["account","workspace-assignment","update"]:
   out({"status":"ok"})
+if a[:2]==["api","get"] and "/workspace-assignments/" in a[2]:
+  out({"principal_id":72574283613480,
+       "workspace_id":7474657268940105,
+       "account_id":"e6cf2e56-e1fa-464b-91b0-39517832bde0",
+       "entitlements":json.loads(os.environ.get("MOCK_IAM_ENTITLEMENTS",'["WORKSPACE_ACCESS"]')),
+       "effective_entitlements":[]})
+if a[:2]==["api","patch"]:
+  out({"status":"ok"})
 if a[:3]==["account","service-principal-federation-policy","list"]:
   out(json.loads(os.environ.get("MOCK_POLICIES",'[]')))
 if a[:3]==["account","service-principal-federation-policy","create"]:
@@ -82,6 +90,7 @@ def run_mocked(tmp_path, principals, *arguments, policies=None, confirmation="")
         "MOCK_LOG":str(log),
         "MOCK_PRINCIPALS":json.dumps(principals),
         "MOCK_POLICIES":json.dumps([] if policies is None else policies),
+        "MOCK_IAM_ENTITLEMENTS":json.dumps(["WORKSPACE_ACCESS"]),
     })
     p=subprocess.run(["bash",str(SCRIPT),*arguments],input=confirmation,
         capture_output=True,text=True,env=env,timeout=20)
@@ -134,3 +143,12 @@ def test_apply_would_create_identity_and_dispatch_only_status_with_mocks(tmp_pat
     assert "apps start" not in log
     assert "apps stop" not in log
     assert "apps deploy" not in log
+
+
+def test_student_workspace_entitlement_grant_is_scoped_and_idempotent(tmp_path):
+    p, log = run_mocked(tmp_path, [], "--apply", "--status",
+                        policies=[], confirmation="CONFIGURAR-ALUMNO\n")
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert 'api get /api/2.0/identity/accounts/e6cf2e56-e1fa-464b-91b0-39517832bde0/workspaces/7474657268940105/workspace-assignments/72574283613480' in log
+    assert "api patch" not in log  # pre-existing entitlement must be preserved
+    assert "gh workflow run alumno-cloud-control.yml" in log
