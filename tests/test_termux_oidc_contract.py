@@ -35,3 +35,19 @@ def test_termux_linux_container_not_unsafe_android_binary():
     assert 'pkg install -y proot-distro' in INSTALL
     assert 'databricks auth login --host https://accounts.cloud.databricks.com' in INSTALL
     assert "termux-open-url" in INSTALL
+
+
+def test_termux_bash_installs_first_and_has_required_packages():
+    # Termux packages are staged before any PRoot Ubuntu installation.
+    assert "pkg update -y" in INSTALL
+    assert "pkg install -y bash" in INSTALL
+    assert INSTALL.index("pkg install -y bash") < INSTALL.index("pkg install -y proot-distro")
+    assert INSTALL.index("pkg install -y proot-distro") < INSTALL.index("proot-distro install ubuntu:24.04")
+    for package in ("ca-certificates", "openssl", "coreutils", "findutils", "grep", "sed", "tar", "gzip", "unzip", "curl", "jq", "git"):
+        assert package in INSTALL
+    for linux_tool in ("bash", "curl", "jq", "unzip", "git", "gh", "openssl", "python3"):
+        assert linux_tool in INSTALL
+    assert "apt-get install -y bash ca-certificates" in INSTALL
+    assert "bash -n /root/Alumno3C/setup-alumno-oidc-termux.sh" in INSTALL
+    assert "databricks apps start" not in INSTALL
+    assert "action=start" not in INSTALL
