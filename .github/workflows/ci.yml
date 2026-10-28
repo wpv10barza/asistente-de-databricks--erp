@@ -14,6 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validar sintaxis Bash de instalacion Termux
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/INSTALAR-TERMUX-ALUMNO.sh
+          bash -n scripts/setup-alumno-oidc-termux.sh
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
