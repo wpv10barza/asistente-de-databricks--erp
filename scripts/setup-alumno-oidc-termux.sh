@@ -68,9 +68,16 @@ appmeta="$(ws apps get "$APP")"
 [[ "$(get '.name // ""' "$appmeta")" == "$APP" ]] || fail 'Nombre App no corresponde'
 echo '[OK] Cuenta, workspace y App alumno confirmados.'
 principals="$(ac service-principals-v2 list --filter "displayName eq \"$SPNAME\"" --limit 100)"
-[[ "$(get '.next_page_token // .nextPageToken // ""' "$principals")" == '' ]] || fail 'Principals paginados; revisar manual'
-jq -e 'type=="array" or has("Resources") or has("resources") or has("service_principals")' >/dev/null <<<"$principals" || fail 'Lista de principals con formato desconocido'
-matches="$(jq -c --arg n "$SPNAME" '(.Resources // .resources // .service_principals // (if type=="array" then . else [] end)) | map(select((.display_name // .displayName // "")==$n))' <<<"$principals")"
+# Databricks CLI may emit a ROOT JSON ARRAY (as on the Android phone), not
+# only SCIM envelope objects. Never access .Resources/.next_page_token on [].
+principal_page="$(jq -er 'if type=="array" then "" elif type=="object" then (.next_page_token // .nextPageToken // "") else error("unexpected principal list type") end' <<<"$principals")" || fail 'Tipo inesperado de lista de principals'
+[[ -z "$principal_page" ]] || fail 'Principals paginados; revisar manual'
+principal_items="$(jq -ec 'if type=="array" then . elif type=="object" then (.Resources // .resources // .service_principals // .servicePrincipals // error("missing principal collection")) else error("unexpected principal collection") end | if type=="array" then . else error("principal collection must be array") end' <<<"$principals")" || fail 'Lista de principals con formato desconocido'
+# If SCIM explicitly reports more results than returned, never create an
+# identity on an incomplete result set.
+principal_total="$(jq -r 'if type=="object" then (.totalResults // .total_results // -1) else -1 end' <<<"$principals")"
+[[ "$principal_total" == -1 || "$principal_total" -le "$(jq 'length' <<<"$principal_items")" ]] || fail 'Principals SCIM incompletos; no crear duplicados'
+matches="$(jq -c --arg n "$SPNAME" 'map(select((.display_name // .displayName // "")==$n))' <<<"$principal_items")"
 count="$(jq 'length' <<<"$matches")"
 [[ "$count" -le 1 ]] || fail 'Principals duplicados, no crearé otro'
 principal=''
@@ -97,9 +104,10 @@ echo "[OK] Principal id=$spid, Application ID=$client"
 write_json assign '{"permissions":["USER"]}'
 ac workspace-assignment update "$WS" "$spid" --json "@$TMPDIR_RUN/assign" >/dev/null
 policies="$(ac service-principal-federation-policy list "$spid")"
-jq -e 'type=="array" or has("policies")' >/dev/null <<<"$policies" || fail 'Políticas con formato desconocido'
-[[ "$(get '.next_page_token // .nextPageToken // ""' "$policies")" == '' ]] || fail 'Policies paginadas, revisar manual'
-pmatches="$(jq -c --arg n "$POLICY" '(.policies // (if type=="array" then . else [] end)) | map(select((.policy_id // .policyId // "")==$n))' <<<"$policies")"
+policy_page="$(jq -er 'if type=="array" then "" elif type=="object" then (.next_page_token // .nextPageToken // "") else error("unexpected policy list type") end' <<<"$policies")" || fail 'Tipo inesperado de lista de políticas'
+[[ -z "$policy_page" ]] || fail 'Policies paginadas, revisar manual'
+policy_items="$(jq -ec 'if type=="array" then . elif type=="object" then (.policies // error("missing policy collection")) else error("unexpected policy collection") end | if type=="array" then . else error("policy collection must be array") end' <<<"$policies")" || fail 'Políticas con formato desconocido'
+pmatches="$(jq -c --arg n "$POLICY" 'map(select((.policy_id // .policyId // "")==$n))' <<<"$policy_items")"
 [[ "$(jq 'length' <<<"$pmatches")" -le 1 ]] || fail 'Policies duplicadas'
 if [[ "$(jq 'length' <<<"$pmatches")" == 0 ]];then
  policy_json="$(jq -nc --arg i "$ISSUER" --arg a "$ACC" --arg s "$SUBJECT" '{oidc_policy:{issuer:$i,audiences:[$a],subject:$s}}')"
