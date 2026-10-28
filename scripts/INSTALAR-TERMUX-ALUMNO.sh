@@ -3,28 +3,39 @@
 # Does NOT authenticate/create service principals/start Databricks Apps.
 set -Eeuo pipefail
 command -v pkg >/dev/null || { echo 'Ejecutar en Termux nativo (Android), no Ubuntu' >&2; exit 1; }
-echo '== [1/5] Primero: actualizar Termux e instalar Bash =='
+command -v dpkg >/dev/null || { echo 'Falta dpkg; instalacion Termux incompleta' >&2; exit 1; }
+echo '== [0/6] Reparar dpkg ANTES de cualquier pkg/apt =='
+# Termux puede quedar con instalaciones interrumpidas. El espejo "ok" no
+# resuelve E: dpkg was interrupted: hay que finalizar paquetes pendientes.
+# NO borrar locks, /var/lib/dpkg ni reinstalar todo el sistema.
+if ! dpkg --configure -a; then
+  echo 'ERROR: dpkg no pudo terminar la configuracion de paquetes.' >&2
+  echo 'Revise los mensajes anteriores. No continuar con pkg ni con Ubuntu.' >&2
+  echo 'Si se requieren dependencias adicionales, revise primero: apt --fix-broken install' >&2
+  exit 2
+fi
+echo '== [1/6] Actualizar indices Termux e instalar primero Bash =='
 pkg update -y
 pkg install -y bash
 bash --version | head -n 1
 
-echo '== [2/5] Librerias y utilidades completas necesarias en Android =='
+echo '== [2/6] Librerias y utilidades necesarias en Android =='
 # Certificados TLS, descargas, verificacion, compresion, JSON y PRoot.
 # No instalar todos los paquetes de Android: solo los necesarios para este flujo.
-pkg install -y proot-distro curl jq git ca-certificates openssl coreutils findutils grep sed tar gzip unzip
+pkg install -y proot-distro curl jq git ca-certificates openssl coreutils findutils grep sed tar gzip unzip python termux-tools
 for tool in bash curl jq git openssl tar unzip proot-distro; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Falta dependencia requerida: $tool" >&2
     exit 1
   }
 done
-echo '== [3/5] Ubuntu 24.04 bajo PRoot en Android =='
-if ! proot-distro list --installed 2>/dev/null | grep -Eqi 'ubuntu'; then
+echo '== [3/6] Ubuntu 24.04 bajo PRoot en Android =='
+if ! proot-distro list -q 2>/dev/null | grep -qx 'ubuntu'; then
   proot-distro install ubuntu:24.04
 fi
-echo '== [4/5] Bash + librerias Linux + GitHub CLI =='
+echo '== [4/6] Bash + librerias Linux + GitHub CLI =='
 proot-distro login ubuntu -- bash -lc 'set -euo pipefail; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y bash ca-certificates curl jq unzip git gh openssl coreutils findutils grep sed tar gzip python3; mkdir -p /root/Alumno3C; for tool in bash curl jq unzip gh; do command -v "$tool" >/dev/null; done'
-echo '== [5/5] Databricks CLI oficial para Linux ARM64/AMD64 =='
+echo '== [5/6] Databricks CLI oficial para Linux ARM64/AMD64 =='
 proot-distro login ubuntu -- bash -lc '
 set -Eeuo pipefail
 arch="$(uname -m)"
@@ -40,6 +51,7 @@ chmod +x /usr/local/bin/databricks
 rm -f /tmp/databricks-cli.zip
 databricks -v
 '
+echo '== [6/6] Cargar configuracion OIDC segura (solo lectura inicialmente) =='
 proot-distro login ubuntu -- bash -lc 'set -euo pipefail; curl --fail --location --silent --show-error --retry 3 https://raw.githubusercontent.com/wpv10barza/asistente-de-databricks--erp/main/scripts/setup-alumno-oidc-termux.sh -o /root/Alumno3C/setup-alumno-oidc-termux.sh; chmod 700 /root/Alumno3C/setup-alumno-oidc-termux.sh; bash -n /root/Alumno3C/setup-alumno-oidc-termux.sh'
 cat <<'TXT'
 
