@@ -51,3 +51,23 @@ def test_termux_bash_installs_first_and_has_required_packages():
     assert "bash -n /root/Alumno3C/setup-alumno-oidc-termux.sh" in INSTALL
     assert "databricks apps start" not in INSTALL
     assert "action=start" not in INSTALL
+
+
+def test_termux_repairs_interrupted_dpkg_before_pkg():
+    assert "dpkg --configure -a" in INSTALL
+    assert INSTALL.index("dpkg --configure -a") < INSTALL.index("pkg update -y")
+    assert INSTALL.index("pkg update -y") < INSTALL.index("pkg install -y bash")
+    assert "pkg install -y bash" in INSTALL
+    assert "proot-distro list -q" in INSTALL
+    assert "pkg install -y proot-distro" in INSTALL
+    assert "termux-tools" in INSTALL and "python" in INSTALL
+    assert "rm -f /var/lib/dpkg/lock" not in INSTALL
+    assert "databricks apps start" not in INSTALL
+    assert "action=start" not in INSTALL
+
+
+def test_doc_has_one_safe_dpkg_first_copy_paste_command():
+    guide = (ROOT / "docs/TERMUX_CONFIG_ALUMNO_CLOUD.md").read_text(encoding="utf-8")
+    assert "dpkg --configure -a && pkg update -y" in guide
+    assert "bash -o pipefail -c" in guide
+    assert "INSTALAR-TERMUX-ALUMNO.sh" in guide

@@ -4,13 +4,15 @@ Instala Termux desde F-Droid o el proyecto oficial. No necesitas PowerShell ni P
 
 ## 1. En Termux (Android)
 
-Copia y pega este unico bloque en **Termux nativo**, no dentro de Ubuntu. Instala Bash primero y luego ejecuta el instalador directamente desde GitHub, sin guardar ningun archivo manualmente:
+Copia y pega este unico bloque en **Termux nativo**, no dentro de Ubuntu. **Primero ejecuta `dpkg --configure -a` para reparar paquetes interrumpidos**, luego instala Bash y luego ejecuta el instalador directamente desde GitHub, sin guardar ningun archivo manualmente:
 
 ~~~sh
-pkg update -y && pkg install -y bash curl ca-certificates && bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/wpv10barza/asistente-de-databricks--erp/main/scripts/INSTALAR-TERMUX-ALUMNO.sh | bash'
+dpkg --configure -a && pkg update -y && pkg install -y bash curl ca-certificates && bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/wpv10barza/asistente-de-databricks--erp/main/scripts/INSTALAR-TERMUX-ALUMNO.sh | bash'
 ~~~
 
-En el propio instalador se descargan solo las librerias necesarias para la conexion: `openssl`, certificados TLS, `jq`, `git`, `coreutils`, `grep`, `sed`, `findutils`, `tar`, `gzip`, `unzip` y `proot-distro`. Ubuntu incluye Bash, Python 3, `gh` y el Databricks CLI oficial de Linux ARM64/AMD64. No se descargan contrasenas ni credenciales de GitHub o Databricks.
+En el propio instalador se descargan solo las librerias necesarias para la conexion: `openssl`, certificados TLS, `jq`, `git`, `coreutils`, `grep`, `sed`, `findutils`, `tar`, `gzip`, `unzip`, `python`, `termux-tools` y `proot-distro`. Ubuntu incluye Bash, Python 3, `gh` y el Databricks CLI oficial de Linux ARM64/AMD64. No se descargan contrasenas ni credenciales de GitHub o Databricks.
+
+Si `dpkg --configure -a` sigue fallando, **detente y revisa el error completo** antes de continuar. No elimines los archivos de estado ni los locks de dpkg. `apt --fix-broken install` puede ser necesario cuando hay dependencias rotas; revisa los cambios que propone antes de confirmarlos. El aviso `No mirror or mirror group selected` no requiere `termux-change-repo` si la comprobacion indica `ok`.
 
 El instalador prepara Ubuntu PRoot. El CLI de Databricks se instala dentro de Ubuntu Linux ARM64, no como binario nativo de Android.
 
