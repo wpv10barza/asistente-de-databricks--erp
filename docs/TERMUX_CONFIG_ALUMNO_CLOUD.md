@@ -4,12 +4,13 @@ Instala Termux desde F-Droid o el proyecto oficial. No necesitas PowerShell ni P
 
 ## 1. En Termux (Android)
 
+Copia y pega este unico bloque en **Termux nativo**, no dentro de Ubuntu. Instala Bash primero y luego ejecuta el instalador directamente desde GitHub, sin guardar ningun archivo manualmente:
+
 ~~~sh
-pkg update -y && pkg install -y curl ca-certificates
-curl -fLsS https://raw.githubusercontent.com/wpv10barza/asistente-de-databricks--erp/main/scripts/INSTALAR-TERMUX-ALUMNO.sh -o ~/INSTALAR-TERMUX-ALUMNO.sh
-bash -n ~/INSTALAR-TERMUX-ALUMNO.sh
-bash ~/INSTALAR-TERMUX-ALUMNO.sh
+pkg update -y && pkg install -y bash curl ca-certificates && bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/wpv10barza/asistente-de-databricks--erp/main/scripts/INSTALAR-TERMUX-ALUMNO.sh | bash'
 ~~~
+
+En el propio instalador se descargan solo las librerias necesarias para la conexion: `openssl`, certificados TLS, `jq`, `git`, `coreutils`, `grep`, `sed`, `findutils`, `tar`, `gzip`, `unzip` y `proot-distro`. Ubuntu incluye Bash, Python 3, `gh` y el Databricks CLI oficial de Linux ARM64/AMD64. No se descargan contrasenas ni credenciales de GitHub o Databricks.
 
 El instalador prepara Ubuntu PRoot. El CLI de Databricks se instala dentro de Ubuntu Linux ARM64, no como binario nativo de Android.
 

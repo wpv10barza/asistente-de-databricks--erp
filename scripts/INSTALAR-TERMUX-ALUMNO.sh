@@ -3,13 +3,28 @@
 # Does NOT authenticate/create service principals/start Databricks Apps.
 set -Eeuo pipefail
 command -v pkg >/dev/null || { echo 'Ejecutar en Termux nativo (Android), no Ubuntu' >&2; exit 1; }
-echo '== Configurando Termux y Ubuntu para Databricks ALUMNO =='
+echo '== [1/5] Primero: actualizar Termux e instalar Bash =='
 pkg update -y
-pkg install -y proot-distro curl jq git
+pkg install -y bash
+bash --version | head -n 1
+
+echo '== [2/5] Librerias y utilidades completas necesarias en Android =='
+# Certificados TLS, descargas, verificacion, compresion, JSON y PRoot.
+# No instalar todos los paquetes de Android: solo los necesarios para este flujo.
+pkg install -y proot-distro curl jq git ca-certificates openssl coreutils findutils grep sed tar gzip unzip
+for tool in bash curl jq git openssl tar unzip proot-distro; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "Falta dependencia requerida: $tool" >&2
+    exit 1
+  }
+done
+echo '== [3/5] Ubuntu 24.04 bajo PRoot en Android =='
 if ! proot-distro list --installed 2>/dev/null | grep -Eqi 'ubuntu'; then
   proot-distro install ubuntu:24.04
 fi
-proot-distro login ubuntu -- bash -lc 'set -e; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq unzip gh; mkdir -p /root/Alumno3C'
+echo '== [4/5] Bash + librerias Linux + GitHub CLI =='
+proot-distro login ubuntu -- bash -lc 'set -euo pipefail; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y bash ca-certificates curl jq unzip git gh openssl coreutils findutils grep sed tar gzip python3; mkdir -p /root/Alumno3C; for tool in bash curl jq unzip gh; do command -v "$tool" >/dev/null; done'
+echo '== [5/5] Databricks CLI oficial para Linux ARM64/AMD64 =='
 proot-distro login ubuntu -- bash -lc '
 set -Eeuo pipefail
 arch="$(uname -m)"
@@ -25,7 +40,7 @@ chmod +x /usr/local/bin/databricks
 rm -f /tmp/databricks-cli.zip
 databricks -v
 '
-proot-distro login ubuntu -- bash -lc 'curl -fLsS https://raw.githubusercontent.com/wpv10barza/asistente-de-databricks--erp/main/scripts/setup-alumno-oidc-termux.sh -o /root/Alumno3C/setup-alumno-oidc-termux.sh; chmod 700 /root/Alumno3C/setup-alumno-oidc-termux.sh; bash -n /root/Alumno3C/setup-alumno-oidc-termux.sh'
+proot-distro login ubuntu -- bash -lc 'set -euo pipefail; curl --fail --location --silent --show-error --retry 3 https://raw.githubusercontent.com/wpv10barza/asistente-de-databricks--erp/main/scripts/setup-alumno-oidc-termux.sh -o /root/Alumno3C/setup-alumno-oidc-termux.sh; chmod 700 /root/Alumno3C/setup-alumno-oidc-termux.sh; bash -n /root/Alumno3C/setup-alumno-oidc-termux.sh'
 cat <<'TXT'
 
 == Instalación en Android completada (sin iniciar cómputo) ==
