@@ -26,9 +26,9 @@ bash -n /root/Alumno3C/termux-ota-cloud-control.sh
 bash /root/Alumno3C/termux-ota-cloud-control.sh check
 ~~~
 
-Confirma el release ota-d400e8c1 con firmware.bin y manifest.json, más el último resultado de GitHub Actions. No enciende la App.
+Confirma el release 2.7.9 ota-59073909 con firmware.bin y manifest.json, más el último resultado de GitHub Actions. No enciende la App. Si la placa sigue fallando al acceder por HTTPS con HTTP -1, necesita recuperación USB sin erase de NVS; ver AUDITORIA_ALUMNO_C01_C09_USB_FOTA.md.
 
-Si el último status fue SUCCESS y el profesor autorizó encender la App con posible consumo de créditos:
+Si el último run finalizado fue específicamente STATUS exitoso del SHA actual de main, sin acciones de escritura, y el profesor autorizó encender la App con posible consumo de créditos:
 
 ~~~bash
 bash /root/Alumno3C/termux-ota-cloud-control.sh start
@@ -45,8 +45,10 @@ https://github.com/wpv10barza/asistente-de-databricks--erp/actions/workflows/alu
 
 ## 3. Actualización OTA física del ESP32
 
-En la pantalla ESP32, con Wi-Fi 2.4 GHz y hora UTC NTP válida, entra al menú FOTA, escribe d400e8c1, selecciona VERIFICAR y después INSTALAR. El ESP32 descarga por HTTPS el manifiesto y firmware desde GitHub y comprueba SHA-256.
+En la pantalla ESP32, con Wi-Fi 2.4 GHz y hora UTC NTP válida, entra al menú FOTA, escribe 59073909, selecciona VERIFICAR y después INSTALAR. El ESP32 descarga por HTTPS el manifiesto y firmware desde GitHub y comprueba SHA-256.
 
 La App Databricks puede iniciarse desde Termux mediante GitHub Actions, pero no hace la actualización física del ESP32. El flash tampoco aprovisiona mágicamente Wi-Fi o credenciales OAuth/token de dispositivo.
 
 Fuentes: https://docs.databricks.com/api/iam/v2/account-workspace-assignment y https://docs.databricks.com/aws/en/security/auth/entitlements
+
+La versión 2.7.9 incorpora diagnóstico DNS/TLS del error HTTP -1. El último run SUCCESS puede ser STOP: ese caso **NO** autoriza START. Ejecutar un STATUS nuevo desde main, verificar su resultado y solo después START autorizado.

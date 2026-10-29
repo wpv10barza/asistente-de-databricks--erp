@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   id-token: write
 
 concurrency:
@@ -98,6 +99,30 @@ jobs:
           print("Destino confirmado: asistente-cloud-erp-alumno")
           PY
 
+      - name: START exige ultimo STATUS de main verificado en GitHub
+        if: ${{ inputs.action == 'start' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          history="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/alumno-cloud-control.yml/runs?branch=main&event=workflow_dispatch&per_page=25")"
+          previous="$(jq -c --argjson current "$GITHUB_RUN_ID" '[.workflow_runs[] | select(.id != $current and .status == "completed")][0] // {}' <<<"$history")"
+          if ! jq -e --arg sha "$GITHUB_SHA" '(.conclusion == "success") and (.head_sha == $sha) and (.event == "workflow_dispatch") and (.head_branch == "main") and (.id | type == "number")' <<<"$previous" >/dev/null; then
+            echo '::error::START bloqueado: la ultima ejecucion finalizada debe ser STATUS exitoso del mismo commit main.'
+            exit 1
+          fi
+          previous_id="$(jq -r '.id' <<<"$previous")"
+          jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$previous_id/jobs?per_page=100")"
+          if ! jq -e '[.jobs[]?.steps[]? | select(.name == "Estado actual (sin cambios ni inicio de compute)" and .conclusion == "success")] | length > 0' <<<"$jobs" >/dev/null; then
+            echo '::error::START bloqueado: ejecucion anterior no contiene un paso STATUS exitoso.'
+            exit 1
+          fi
+          if ! jq -e '[.jobs[]?.steps[]? | select(.conclusion == "success" and (.name | test("^(Iniciar App|Detener App|Desplegar solo|Otorgar acceso)")))] | length == 0' <<<"$jobs" >/dev/null; then
+            echo '::error::START bloqueado: la ejecucion previa realizo una accion de escritura.'
+            exit 1
+          fi
+          echo "[OK] STATUS sin escrituras validado: run $previous_id, SHA $GITHUB_SHA"
       - name: Estado actual (sin cambios ni inicio de compute)
         if: ${{ inputs.action == 'status' }}
         run: databricks apps get "$STUDENT_APP" --output json

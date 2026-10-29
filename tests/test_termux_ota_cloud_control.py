@@ -16,7 +16,7 @@ def test_git_oidc_workspace_entitlement_explicit_and_scoped():
 
 
 def test_firmware_verification_and_gated_termux_start():
-    assert 'ota-d400e8c1' in CTRL
+    assert 'ota-59073909' in CTRL
     assert 'firmware.bin' in CTRL and 'manifest.json' in CTRL
     assert 'DATABRICKS_CLIENT_ID' in CTRL
     assert '439d8e37-d5ac-4910-adc6-0eccf1a8db94' in CTRL
@@ -28,3 +28,11 @@ def test_firmware_verification_and_gated_termux_start():
     assert "databricks apps deploy" not in CTRL
     assert "erase_flash" not in CTRL
     assert "dbc-a1aca8aa-28bd.cloud.databricks.com" not in CTRL
+
+
+def test_start_requires_latest_successful_status_and_main_sha():
+    assert 'gh run view "$run_id"' in CTRL
+    assert 'main_sha="$(gh api' in CTRL
+    assert '.headSha==$sha' in CTRL
+    assert 'Estado actual (sin cambios ni inicio de compute)' in CTRL
+    assert 'action=start' in CTRL

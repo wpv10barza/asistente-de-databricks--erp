@@ -18,6 +18,13 @@ jobs:
       DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
 
     steps:
+      - name: Restringir despliegue legacy a invocacion manual desde main
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]] || exit 1
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]] || exit 1
+          [[ "$GITHUB_REPOSITORY" == 'wpv10barza/asistente-de-databricks--erp' ]] || exit 1
       - uses: actions/checkout@v4
 
       - name: Install Databricks CLI
